@@ -14,10 +14,15 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 
 | Pipeline stage | State |
 |---|---|
-| Request validation | Done: inputs, defaults, tier rules, maker/checker, exceptions |
+| Request validation | Done: inputs, defaults, tier rules, maker/checker, exceptions, analyst decisions |
 | Control model | Done: decision matrix, tier floors, escalation |
 | 1. Resolve | Partial: prefixes, actions by risk tier, resources, condition keys, SDK operations. Crosswalk, dependencies, availability and capability flags are still to do |
-| 2. Assess · 3. Select · 4. Generate · 5. Compose · 6. Validate | Not started |
+| 2. Assess | Not started (the Athena test case uses hand-written findings) |
+| 3. Select | Done: tier scope, modes, retirement on promotion, registry reuse and escalation, checker items, next tier |
+| 4. Generate | Partial: SCP and RCP guardrails and the allow-list; Config, CloudTrail and Sentinel are reported as pending |
+| 5. Compose · 6. Validate | Not started; a local SCP/RCP evaluator backs the Level 1 guardrail tests |
+
+Initial test case: [Athena from Private Preview to Hardened](docs/simulations/athena-journey.md).
 
 ## Usage
 
@@ -27,6 +32,8 @@ Requires Python 3.13 or later. There are no third-party dependencies.
 python3 -m onboard check-request request.json
 python3 -m onboard resolve request.json --out runs/bedrock
 python3 -m onboard resolve request.json --out runs/bedrock --snapshot snapshots/2026-10-30  # offline
+python3 -m onboard select request.json --findings findings.json --out runs/bedrock
+python3 -m onboard generate request.json --run runs/bedrock
 ```
 
 A minimal request (synthetic values):

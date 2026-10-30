@@ -1,0 +1,1324 @@
+{
+  "candidates": [
+    {
+      "blind_spots": [
+        "management account",
+        "service-linked roles"
+      ],
+      "citations": [
+        {
+          "anchor": "Region policy: enforced by an SCP deny on aws:RequestedRegion",
+          "retrieved": "2026-10-30",
+          "url": "spec:AWS Service Onboarding Tool Spec v0.1",
+          "verification": "not-run"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-01",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "SC-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "conditions": {
+          "StringNotEquals": {
+            "aws:RequestedRegion": "${allowed_regions}"
+          }
+        },
+        "not_actions": [
+          "iam:*",
+          "organizations:*",
+          "sts:*",
+          "route53:*",
+          "cloudfront:*",
+          "support:*"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "calls to non-global actions in other regions",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom: resources outside allowed regions",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "checks": "provider region and aliases",
+          "status": "planned"
+        }
+      },
+      "objective": "region-containment",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Requests only in allowed regions"
+    },
+    {
+      "blind_spots": [
+        "AWS-owned buckets accessed by services"
+      ],
+      "citations": [
+        {
+          "anchor": "When actors interact with Athena, their permissions pass through Athena to determine what Athena can access.",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/athena/latest/ug/s3-permissions.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-02",
+      "dependency_of": [
+        "athena"
+      ],
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "SC-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "s3:*"
+        ],
+        "conditions": {
+          "BoolIfExists": {
+            "aws:PrincipalIsAWSService": "false"
+          },
+          "StringNotEqualsIfExists": {
+            "aws:ResourceOrgID": "${org_id}"
+          }
+        },
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "denied S3 calls to resources outside the organization",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "the bucket owner of a query target isn't in the plan",
+          "status": "not_expressible"
+        }
+      },
+      "notes": "Athena query results, UNLOAD and CTAS write to S3 with the caller's permissions, so the S3 resource perimeter contains them.",
+      "objective": "resource-perimeter",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Organization principals reach only organization S3 resources"
+    },
+    {
+      "blind_spots": [
+        "service-linked roles",
+        "AWS managed KMS keys"
+      ],
+      "citations": [
+        {
+          "anchor": "RCPs apply to actions for the following AWS services: ... Amazon S3 (prefix:s3) ... AWS Key Management Service (prefix:kms); Athena is not listed",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-03",
+      "dependency_of": [
+        "athena"
+      ],
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-3",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "s3:*",
+          "kms:*"
+        ],
+        "conditions": {
+          "BoolIfExists": {
+            "aws:PrincipalIsAWSService": "false"
+          },
+          "StringNotEqualsIfExists": {
+            "aws:PrincipalOrgID": "${org_id}"
+          }
+        },
+        "type": "rcp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "denied calls from principals outside the organization",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "s3-bucket-policy-grantee-check (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "status": "planned"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        }
+      },
+      "notes": "Athena itself isn't RCP-supported; its data perimeter is the S3 and KMS resources it reads and writes.",
+      "objective": "identity-perimeter",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Only organization principals reach S3 and KMS resources"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "Private Preview authorization",
+          "retrieved": "2026-10-30",
+          "url": "spec:AWS Service Onboarding Tool Spec v0.1",
+          "verification": "not-run"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ATH-C-01",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-3",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "athena:*"
+        ],
+        "conditions": {
+          "StringNotEquals": {
+            "aws:PrincipalAccount": "${preview_accounts}"
+          }
+        },
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "denied athena calls from accounts not on the preview list",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "the plan doesn't reliably carry the target account",
+          "status": "not_expressible"
+        }
+      },
+      "objective": "preview-accounts",
+      "severity": "High",
+      "severity_source": "rubric",
+      "title": "Athena only in the authorized preview accounts",
+      "until_tier": "Private Preview"
+    },
+    {
+      "capability_excluded": "federated and cross-account data catalogs",
+      "citations": [
+        {
+          "anchor": "AWS::Athena::WorkGroup, AWS::Athena::DataCatalog, AWS::Athena::PreparedStatement",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/config/latest/developerguide/resource-config-reference.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ATH-C-02",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "athena:CreateDataCatalog",
+          "athena:UpdateDataCatalog"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "CreateDataCatalog, UpdateDataCatalog",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom: AWS::Athena::DataCatalog other than AwsDataCatalog",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "checks": "forbid aws_athena_data_catalog",
+          "level": "hard-mandatory",
+          "status": "planned"
+        }
+      },
+      "notes": "No condition key tells catalog types apart, so the whole action is denied (finding F1).",
+      "objective": "no-data-egress",
+      "severity": "High",
+      "severity_source": "rubric",
+      "title": "No federated or cross-account data catalogs"
+    },
+    {
+      "capability_excluded": "Spark notebooks and sessions",
+      "citations": [],
+      "class": "Containment",
+      "control_id": "ATH-C-03",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "athena:StartSession",
+          "athena:StartCalculationExecution",
+          "athena:CreateNotebook",
+          "athena:ImportNotebook",
+          "athena:ExportNotebook",
+          "athena:CreatePresignedNotebookUrl",
+          "athena:GetSessionEndpoint"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "the denied Spark and notebook actions",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "checks": "forbid workgroups with a Spark engine",
+          "level": "hard-mandatory",
+          "status": "planned"
+        }
+      },
+      "objective": "no-external-sharing",
+      "severity": "High",
+      "severity_source": "rubric",
+      "title": "No Spark notebooks or sessions"
+    },
+    {
+      "blind_spots": [
+        "S3 requests made through Athena can't be restricted by aws:SourceVpce"
+      ],
+      "citations": [
+        {
+          "anchor": "Athena supports making calls to all of its API actions inside your VPC.",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/athena/latest/ug/interface-vpc-endpoint.html",
+          "verification": "verified"
+        },
+        {
+          "anchor": "You also cannot restrict or allow access to Amazon S3 resources based on the aws:SourceVpc or aws:SourceVpce condition keys.",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/athena/latest/ug/s3-permissions.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ATH-C-04",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "SC-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "athena:*"
+        ],
+        "conditions": {
+          "BoolIfExists": {
+            "aws:ViaAWSService": "false"
+          },
+          "StringNotEqualsIfExists": {
+            "aws:SourceVpce": "${vpce_ids}"
+          }
+        },
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "athena calls without a vpcEndpointId",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        }
+      },
+      "notes": "Blocks the console from outside the VPC; that is the trade-off the network_perimeter decision accepts.",
+      "objective": "network-perimeter",
+      "prerequisites": [
+        "athena interface VPC endpoint in each account"
+      ],
+      "requires_decision": {
+        "include_when": "vpc-endpoint",
+        "key": "network_perimeter"
+      },
+      "severity": "Medium",
+      "severity_source": "rubric",
+      "title": "Athena API only through the organization's VPC endpoints"
+    },
+    {
+      "citations": [],
+      "class": "Supervision",
+      "control_id": "ORG-S-01",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AU-9",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "cloudtrail:StopLogging",
+          "cloudtrail:DeleteTrail",
+          "cloudtrail:UpdateTrail",
+          "cloudtrail:PutEventSelectors",
+          "cloudtrail:PutInsightSelectors"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "trail changes",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "cloudtrail-enabled / multi-region-cloudtrail-enabled (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        }
+      },
+      "objective": "logging-tamper",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "CloudTrail can't be stopped or reconfigured"
+    },
+    {
+      "citations": [],
+      "class": "Supervision",
+      "control_id": "ORG-S-02",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AU-9",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-8",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "config:StopConfigurationRecorder",
+          "config:DeleteConfigurationRecorder",
+          "config:DeleteDeliveryChannel"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "recorder changes",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        }
+      },
+      "objective": "detection-tamper",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Config recording can't be stopped"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "If Override client-side settings is selected, workgroup settings are enforced at the workgroup level for all clients in the workgroup",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/athena/latest/ug/workgroups-settings-override.html",
+          "verification": "verified"
+        },
+        {
+          "anchor": "athena-workgroup-enforce-workgroup-configuration",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/config/latest/developerguide/managed-rules-by-aws-config.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Supervision",
+      "control_id": "ATH-S-01",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-6",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "athena-workgroup-enforce-workgroup-configuration",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no Athena condition key exposes workgroup settings (F1)",
+          "status": "not_expressible"
+        },
+        "sentinel": {
+          "checks": "aws_athena_workgroup.configuration.enforce_workgroup_configuration = true",
+          "status": "planned"
+        }
+      },
+      "objective": "enforced-configuration",
+      "severity": "Medium",
+      "severity_source": "rubric",
+      "title": "Workgroups override client-side settings"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "athena-workgroup-encrypted-at-rest",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/config/latest/developerguide/managed-rules-by-aws-config.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Supervision",
+      "control_id": "ATH-S-02",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "SC-28",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "athena-workgroup-encrypted-at-rest; customer-managed key needs a custom check",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no Athena condition key exposes result encryption (F1)",
+          "status": "not_expressible"
+        },
+        "sentinel": {
+          "checks": "encryption_option in SSE_KMS, CSE_KMS with kms_key_arn set",
+          "status": "planned"
+        }
+      },
+      "objective": "encryption",
+      "severity": "Medium",
+      "severity_source": "rubric",
+      "title": "Query results encrypted with KMS"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "[Athena.4] Athena workgroups should have logging enabled ... Severity: Medium",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/securityhub/latest/userguide/athena-controls.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Supervision",
+      "control_id": "ATH-S-03",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AU-12",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "CRI-Profile",
+          "id": "DE.AE-03.01",
+          "mapping_type": "aws-mapped",
+          "verification": "verified",
+          "version": "v2.2"
+        },
+        {
+          "framework": "CRI-Profile",
+          "id": "DE.CM-03.01",
+          "mapping_type": "aws-mapped",
+          "verification": "verified",
+          "version": "v2.2"
+        },
+        {
+          "framework": "CRI-Profile",
+          "id": "PR.IR-04.01",
+          "mapping_type": "aws-mapped",
+          "verification": "verified",
+          "version": "v2.2"
+        },
+        {
+          "framework": "CRI-Profile",
+          "id": "PR.PS-04.02",
+          "mapping_type": "aws-mapped",
+          "verification": "verified",
+          "version": "v2.2"
+        },
+        {
+          "framework": "CRI-Profile",
+          "id": "PR.PS-04.03",
+          "mapping_type": "aws-mapped",
+          "verification": "verified",
+          "version": "v2.2"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "athena-workgroup-logging-enabled",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "configuration state",
+          "status": "not_expressible"
+        },
+        "sentinel": {
+          "checks": "publish_cloudwatch_metrics_enabled = true",
+          "status": "planned"
+        }
+      },
+      "objective": "logging",
+      "security_hub_id": "Athena.4",
+      "severity": "Medium",
+      "severity_source": "security-hub",
+      "title": "Workgroups have logging enabled"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "AWS::Athena::WorkGroup, AWS::Athena::DataCatalog, AWS::Athena::PreparedStatement",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/config/latest/developerguide/resource-config-reference.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Supervision",
+      "control_id": "ATH-S-04",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-8",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "config:PutConfigurationRecorder changes",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom: recorder includes AWS::Athena::WorkGroup, DataCatalog, PreparedStatement",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        }
+      },
+      "objective": "config-recording",
+      "severity": "Medium",
+      "severity_source": "rubric",
+      "title": "Config records Athena resource types in every allowed region"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "If Override client-side settings is selected, workgroup settings are enforced at the workgroup level for all clients in the workgroup",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/athena/latest/ug/workgroups-settings-override.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Supervision",
+      "control_id": "ATH-S-05",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AC-3",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "custom Guard: ResultConfiguration.ExpectedBucketOwner set",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no Athena condition key exposes the result location (F1)",
+          "status": "not_expressible"
+        },
+        "sentinel": {
+          "checks": "result_configuration.expected_bucket_owner set",
+          "status": "planned"
+        }
+      },
+      "objective": "results-location",
+      "severity": "Medium",
+      "severity_source": "rubric",
+      "title": "Query results location names its expected bucket owner"
+    },
+    {
+      "citations": [],
+      "class": "Supervision",
+      "control_id": "ATH-S-06",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "SI-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "AU-6",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "AccessDenied on athena:* with an SCP reason; any call by a BreakGlass role",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        }
+      },
+      "objective": "guardrail-detection",
+      "severity": "High",
+      "severity_source": "rubric",
+      "title": "Denied attempts against Athena guardrails and break-glass use are detected"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "[Athena.3] Athena workgroups should be tagged ... Severity: Low",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/securityhub/latest/userguide/athena-controls.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Hardening",
+      "control_id": "ATH-H-01",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-8",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "tagged-athena-workgroup",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "tags present on aws_athena_workgroup",
+          "status": "planned"
+        }
+      },
+      "objective": "inventory",
+      "security_hub_id": "Athena.3",
+      "severity": "Low",
+      "severity_source": "security-hub",
+      "title": "Workgroups are tagged"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "[Athena.2] Athena data catalogs should be tagged ... Severity: Low",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/securityhub/latest/userguide/athena-controls.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Hardening",
+      "control_id": "ATH-H-02",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-8",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "tagged-athena-datacatalog",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "tags present on aws_athena_data_catalog",
+          "status": "planned"
+        }
+      },
+      "notes": "Only AwsDataCatalog exists while ATH-C-02 holds.",
+      "objective": "inventory",
+      "security_hub_id": "Athena.2",
+      "severity": "Low",
+      "severity_source": "security-hub",
+      "title": "Data catalogs are tagged"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "athena-workgroup-engine-version-auto-upgrade",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/config/latest/developerguide/managed-rules-by-aws-config.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Hardening",
+      "control_id": "ATH-H-03",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "SI-2",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "athena-workgroup-engine-version-auto-upgrade",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "engine_version.selected_engine_version = AUTO",
+          "status": "planned"
+        }
+      },
+      "objective": "hygiene",
+      "severity": "Low",
+      "severity_source": "rubric",
+      "title": "Workgroup engine versions upgrade automatically"
+    },
+    {
+      "citations": [
+        {
+          "anchor": "athena-workgroup-description",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/config/latest/developerguide/managed-rules-by-aws-config.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Hardening",
+      "control_id": "ATH-H-04",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-8",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "athena-workgroup-description",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "description set",
+          "status": "planned"
+        }
+      },
+      "objective": "inventory",
+      "severity": "Informational",
+      "severity_source": "rubric",
+      "title": "Workgroups have a description"
+    },
+    {
+      "citations": [],
+      "class": "Hardening",
+      "control_id": "ATH-H-05",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "SC-5",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "reason": "not API activity",
+          "status": "not_applicable"
+        },
+        "config": {
+          "rule": "custom Guard: BytesScannedCutoffPerQuery set",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "bytes_scanned_cutoff_per_query set",
+          "status": "planned"
+        }
+      },
+      "objective": "resource-limits",
+      "severity": "Low",
+      "severity_source": "rubric",
+      "title": "Workgroups cap the data scanned per query"
+    },
+    {
+      "citations": [],
+      "class": "Hardening",
+      "control_id": "ATH-H-06",
+      "framework_refs": [
+        {
+          "framework": "NIST-SP-800-53",
+          "id": "CM-8",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "athena:CreateWorkGroup"
+        ],
+        "conditions": {
+          "Null": {
+            "aws:RequestTag/cost-center": "true"
+          }
+        },
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "CreateWorkGroup without the tag",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "required-tags (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "checks": "cost-center tag on aws_athena_workgroup",
+          "status": "planned"
+        }
+      },
+      "objective": "attribution",
+      "severity": "Low",
+      "severity_source": "rubric",
+      "title": "Workgroups are created with a cost-center tag"
+    }
+  ],
+  "dependencies": [
+    {
+      "citation": {
+        "anchor": "When actors interact with Athena, their permissions pass through Athena to determine what Athena can access.",
+        "retrieved": "2026-10-30",
+        "url": "https://docs.aws.amazon.com/athena/latest/ug/s3-permissions.html",
+        "verification": "verified"
+      },
+      "prefix": "s3",
+      "why": "query data, results, UNLOAD and CTAS"
+    },
+    {
+      "citation": {
+        "anchor": "an interface VPC endpoint (AWS PrivateLink) and an AWS Glue VPC endpoint",
+        "retrieved": "2026-10-30",
+        "url": "https://docs.aws.amazon.com/athena/latest/ug/interface-vpc-endpoint.html",
+        "verification": "unverifiable"
+      },
+      "prefix": "glue",
+      "why": "AWS Glue Data Catalog for databases and tables"
+    },
+    {
+      "citation": {
+        "anchor": "Supervision: customer-managed keys",
+        "retrieved": "2026-10-30",
+        "url": "spec:AWS Service Onboarding Tool Spec v0.1",
+        "verification": "not-run"
+      },
+      "prefix": "kms",
+      "why": "SSE-KMS and CSE-KMS query results (ATH-S-02)"
+    }
+  ],
+  "schema": "findings/v1",
+  "service": "athena",
+  "simulated": "Hand-written stand-in for the Assess stage. Facts with verification 'verified' were checked against the cited AWS page on 2026-10-30; framework mappings are inferred and the verification pass has not run."
+}

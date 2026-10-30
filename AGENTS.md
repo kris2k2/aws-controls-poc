@@ -22,8 +22,10 @@ the `governance-sync` workflow (or `python3 .governance/tools/governance.py sync
   except snapshots of the public AWS service reference.
 - Adding a dependency, a source host or a model call needs an ADR and a
   threat-model update (`docs/threat-models/onboarding-tool.md`) first.
-- Worked example: `docs/simulations/athena-private-preview.md`, pinned by
-  `tests/test_athena_acceptance.py` and the snapshot in `tests/fixtures/`.
+- Initial test case: Athena through all three tiers,
+  `docs/simulations/athena-journey.md`, tested by `tests/test_athena_journey.py`
+  with the fixtures in `tests/fixtures/athena/`. Keep it green; extend it when a
+  stage is added.
 - Proof of concept for AWS controls. Infrastructure follows the AWS defaults in
   the baseline: CDK (TypeScript) with `project-guardrails.ts`, home region
   `ca-central-1`, stacks named `aws-controls-poc` or `aws-controls-poc-*`, and

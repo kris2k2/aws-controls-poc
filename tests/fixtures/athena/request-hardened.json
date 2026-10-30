@@ -1,0 +1,30 @@
+{
+  "service": "Amazon Athena",
+  "maturity_tier": "Hardened",
+  "run_mode": "diff",
+  "org_state": {
+    "organization_id": "o-exampleorgid",
+    "vpc_endpoints": {
+      "athena": [
+        "vpce-0example1111111111"
+      ]
+    },
+    "ous": [],
+    "policies": []
+  },
+  "maker": "analyst-a",
+  "checker": "analyst-b",
+  "break_glass_principals": [
+    "arn:aws:iam::*:role/BreakGlass-*"
+  ],
+  "capabilities_excluded": [
+    "federated and cross-account data catalogs",
+    "Spark notebooks and sessions"
+  ],
+  "decisions": {
+    "network_perimeter": "vpc-endpoint"
+  },
+  "target_scope": [
+    "Workloads/Analytics"
+  ]
+}

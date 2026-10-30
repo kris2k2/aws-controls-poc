@@ -29,7 +29,7 @@ _KNOWN_FIELDS = {
     "control_registry", "maker", "checker", "criticality", "data_classification",
     "regulatory_profile", "jurisdictions", "allowed_regions", "framework_profile",
     "capabilities_excluded", "exceptions", "break_glass_principals", "source_pins",
-    "run_mode", "non_production_attested",
+    "run_mode", "non_production_attested", "decisions",
 }
 _EXCEPTION_FIELDS = ("principal", "control_id", "owner", "expires", "rationale")
 
@@ -73,6 +73,8 @@ class OnboardingRequest:
     exceptions: tuple[OnboardingException, ...] = ()
     break_glass_principals: tuple[str, ...] = ()
     source_pins: dict = field(default_factory=dict)
+    # Analyst decisions the spec leaves open per service, e.g. {"network_perimeter": "vpc-endpoint"}.
+    decisions: dict = field(default_factory=dict)
 
 
 def _strings(value: Any, name: str, problems: list[str]) -> tuple[str, ...]:
@@ -195,6 +197,12 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         problems.append("source_pins must be an object")
         source_pins = {}
 
+    decisions = data.get("decisions") or {}
+    if not isinstance(decisions, dict) or not all(isinstance(k, str) and isinstance(v, str) and v
+                                                   for k, v in decisions.items()):
+        problems.append("decisions must map decision names to non-empty strings")
+        decisions = {}
+
     jurisdictions = _strings(data.get("jurisdictions"), "jurisdictions", problems)
     excluded = _strings(data.get("capabilities_excluded"), "capabilities_excluded", problems)
     break_glass = _strings(data.get("break_glass_principals"), "break_glass_principals", problems)
@@ -210,5 +218,5 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         jurisdictions=jurisdictions, allowed_regions=regions,
         framework_profile=data.get("framework_profile") or DEFAULT_FRAMEWORK_PROFILE,
         capabilities_excluded=excluded, exceptions=tuple(exceptions),
-        break_glass_principals=break_glass, source_pins=source_pins,
+        break_glass_principals=break_glass, source_pins=source_pins, decisions=decisions,
     )

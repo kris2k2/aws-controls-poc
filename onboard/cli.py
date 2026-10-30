@@ -8,8 +8,11 @@ import sys
 import urllib.parse
 from pathlib import Path
 
+from .controls import FindingsError, load_findings
+from .generate import GenerateError, generate
 from .request import RequestError, parse_request
 from .resolve import ResolveError, resolve
+from .select import SelectError, select
 from .service_reference import INDEX_URL, ServiceReference, SourceError, check_url, http_fetch
 
 
@@ -63,6 +66,46 @@ def cmd_resolve(args) -> int:
     return 0
 
 
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise FindingsError([f"cannot read {path}: {exc}"]) from exc
+
+
+def cmd_select(args) -> int:
+    request = _load_request(args.request)
+    findings = load_findings(_read_json(Path(args.findings)))
+    result = select(findings, request)
+    run = Path(args.out)
+    # A re-run must not leave control records from an earlier selection behind.
+    for stale in (run / "controls").glob("*.json"):
+        stale.unlink()
+    _write_json(run / "findings.json", findings)
+    for cid, record in result["controls"].items():
+        _write_json(run / "controls" / f"{cid}.json", record)
+    _write_json(run / "selection.json", result["selection"])
+    _write_json(run / "registry.json", result["registry"])
+    sel = result["selection"]
+    print(f"Selected {len(sel['controls'])} controls at {sel['maturity_tier']} "
+          f"({', '.join(f'{k}: {v}' for k, v in sorted(sel['counts']['mode'].items()))}); "
+          f"{len(sel['checker_items'])} checker items")
+    return 0
+
+
+def cmd_generate(args) -> int:
+    request = _load_request(args.request)
+    run = Path(args.run)
+    findings = load_findings(_read_json(run / "findings.json"))
+    controls = {p.stem: _read_json(p) for p in sorted((run / "controls").glob("*.json"))}
+    result = generate(findings, controls, request)
+    for name, policy in result["policies"].items():
+        _write_json(run / "org-policies" / f"{name}.json", policy)
+    _write_json(run / "generation.json", result["report"])
+    print(f"Wrote {len(result['policies'])} organization policies to {run / 'org-policies'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="onboard", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -77,9 +120,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--snapshot", help="read the service reference from this directory instead of AWS")
     p.set_defaults(func=cmd_resolve)
 
+    p = sub.add_parser("select", help="Select stage: write control records and selection.json")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--findings", required=True, help="findings.json from Assess")
+    p.add_argument("--out", required=True, help="run output directory")
+    p.set_defaults(func=cmd_select)
+
+    p = sub.add_parser("generate", help="Generate stage: write organization policies and generation.json")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--run", required=True, help="run directory written by select")
+    p.set_defaults(func=cmd_generate)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (RequestError, ResolveError, SourceError) as exc:
+    except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
