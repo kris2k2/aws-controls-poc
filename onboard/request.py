@@ -20,6 +20,16 @@ DEFAULT_FRAMEWORK_PROFILE = "baseline"
 # The profile's region policy: ca-central-1 and eu-west-1 open org-wide;
 # us-east-1 only through exceptions discovered in Resolve.
 DEFAULT_ALLOWED_REGIONS = ("ca-central-1", "eu-west-1")
+# The lowest criticality each data classification implies. A classification
+# raises the declared (or default) criticality, never lowers it. Internal
+# Restricted is the classification behind the Moderate default (decided
+# 2026-10-30). Labels above it are deliberately absent until their criticality
+# is decided, so a request using one fails instead of being guessed.
+CLASSIFICATION_CRITICALITY = {
+    "Public": Criticality.LOW,
+    "Internal": Criticality.LOW,
+    "Internal Restricted": Criticality.MODERATE,
+}
 
 _ACCOUNT_ID = re.compile(r"^\d{12}$")
 _REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d$")
@@ -29,7 +39,7 @@ _KNOWN_FIELDS = {
     "control_registry", "maker", "checker", "criticality", "data_classification",
     "regulatory_profile", "jurisdictions", "allowed_regions", "framework_profile",
     "capabilities_excluded", "exceptions", "break_glass_principals", "source_pins",
-    "run_mode", "non_production_attested",
+    "run_mode", "non_production_attested", "decisions",
 }
 _EXCEPTION_FIELDS = ("principal", "control_id", "owner", "expires", "rationale")
 
@@ -65,6 +75,8 @@ class OnboardingRequest:
     control_registry: dict | None = None
     criticality: Criticality = Criticality.MODERATE
     data_classification: str | None = None
+    # Where the criticality came from: "declared", "default", or "raised by data classification".
+    criticality_source: str = "default"
     regulatory_profile: str = DEFAULT_REGULATORY_PROFILE
     jurisdictions: tuple[str, ...] = ()
     allowed_regions: tuple[str, ...] = DEFAULT_ALLOWED_REGIONS
@@ -73,6 +85,8 @@ class OnboardingRequest:
     exceptions: tuple[OnboardingException, ...] = ()
     break_glass_principals: tuple[str, ...] = ()
     source_pins: dict = field(default_factory=dict)
+    # Analyst decisions the spec leaves open per service, e.g. {"network_perimeter": "vpc-endpoint"}.
+    decisions: dict = field(default_factory=dict)
 
 
 def _strings(value: Any, name: str, problems: list[str]) -> tuple[str, ...]:
@@ -114,6 +128,15 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
     tier = _enum(Tier, data.get("maturity_tier"), "maturity_tier", problems)
     criticality = _enum(Criticality, data.get("criticality"), "criticality", problems,
                         default=Criticality.MODERATE)
+    criticality_source = "declared" if data.get("criticality") is not None else "default"
+    classification = data.get("data_classification")
+    if isinstance(classification, str) and classification.strip():
+        implied = CLASSIFICATION_CRITICALITY.get(classification)
+        if implied is None:
+            problems.append(f"data_classification {classification!r} has no criticality mapping; "
+                            f"known: {', '.join(CLASSIFICATION_CRITICALITY)}")
+        elif criticality is not None and implied > criticality:
+            criticality, criticality_source = implied, "raised by data classification"
 
     run_mode = data.get("run_mode", "new")
     if run_mode not in RUN_MODES:
@@ -195,6 +218,12 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         problems.append("source_pins must be an object")
         source_pins = {}
 
+    decisions = data.get("decisions") or {}
+    if not isinstance(decisions, dict) or not all(isinstance(k, str) and isinstance(v, str) and v
+                                                   for k, v in decisions.items()):
+        problems.append("decisions must map decision names to non-empty strings")
+        decisions = {}
+
     jurisdictions = _strings(data.get("jurisdictions"), "jurisdictions", problems)
     excluded = _strings(data.get("capabilities_excluded"), "capabilities_excluded", problems)
     break_glass = _strings(data.get("break_glass_principals"), "break_glass_principals", problems)
@@ -206,9 +235,10 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         org_state=org_state, run_mode=run_mode, preview_accounts=preview_accounts,
         non_production_attested=attested, target_scope=target_scope, control_registry=registry,
         criticality=criticality, data_classification=data.get("data_classification"),
+        criticality_source=criticality_source,
         regulatory_profile=data.get("regulatory_profile") or DEFAULT_REGULATORY_PROFILE,
         jurisdictions=jurisdictions, allowed_regions=regions,
         framework_profile=data.get("framework_profile") or DEFAULT_FRAMEWORK_PROFILE,
         capabilities_excluded=excluded, exceptions=tuple(exceptions),
-        break_glass_principals=break_glass, source_pins=source_pins,
+        break_glass_principals=break_glass, source_pins=source_pins, decisions=decisions,
     )

@@ -91,6 +91,23 @@ class ParseRequestTest(unittest.TestCase):
         self.assertIn("exceptions[1] expired on 2026-10-30", problems)
         self.assertIn("exceptions[2].expires must be an ISO date", problems)
 
+    def test_internal_restricted_is_the_moderate_default(self):
+        r = parse_request(preview_request(data_classification="Internal Restricted"), today=TODAY)
+        self.assertEqual((r.criticality, r.criticality_source), (Criticality.MODERATE, "default"))
+
+    def test_classification_raises_a_lower_declared_criticality(self):
+        r = parse_request(preview_request(criticality="Low", data_classification="Internal Restricted"), today=TODAY)
+        self.assertEqual((r.criticality, r.criticality_source),
+                         (Criticality.MODERATE, "raised by data classification"))
+
+    def test_classification_never_lowers_criticality(self):
+        r = parse_request(preview_request(criticality="High", data_classification="Internal"), today=TODAY)
+        self.assertEqual((r.criticality, r.criticality_source), (Criticality.HIGH, "declared"))
+
+    def test_unmapped_classification_fails_closed(self):
+        self.assertIn("data_classification 'Confidential' has no criticality mapping",
+                      self.problems(preview_request(data_classification="Confidential")))
+
     def test_region_names_are_checked(self):
         self.assertIn("invalid region names: Canada",
                       self.problems(preview_request(allowed_regions=["ca-central-1", "Canada"])))

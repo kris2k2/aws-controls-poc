@@ -3,8 +3,8 @@
 Runs the tool as far as it is built (request validation, the control model,
 Resolve) against a pinned snapshot of the real AWS service reference, retrieved
 2026-10-30. The walkthrough of the stages not built yet is in
-docs/simulations/athena-private-preview.md. Refresh the snapshot together with
-that document.
+docs/simulations/athena-journey.md, and the full three-tier journey is
+tested in tests/test_athena_journey.py. Refresh the snapshot together with them.
 """
 
 import io

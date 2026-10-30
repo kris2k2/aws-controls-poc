@@ -8,7 +8,7 @@
 | Related PR / ADR | [ADR-0001](../adr/0001-python-stdlib-staged-pipeline.md) |
 
 Scope: the tool as built so far (request validation, the control model, the
-Resolve stage). Update this model whenever a stage adds a source, a credential
+Resolve, Select and Generate stages, and the local policy evaluator). Update this model whenever a stage adds a source, a credential
 or a model call.
 
 ## 1. What are we building?
@@ -46,7 +46,7 @@ request file, written by the analyst but validated as untrusted input;
 | **R**epudiation | Yes | Nobody can show who approved an enforcing control | Maker and checker required and must differ. Approvals over a hashed manifest come with Validate | Partly done |
 | **I**nformation disclosure | Yes | Real org state or account IDs committed with fixtures or run outputs | Fixtures are synthetic (AWS documentation account ID); run outputs live outside the repo; the PII and secret scans run on every commit | Done for this slice |
 | **D**enial of service | Low | A huge or slow response stalls a run | 30 s timeout, 32 MB response cap; failures stop the run with a clear error | Done |
-| **E**levation of privilege | Yes (later) | Generated guardrails are too permissive, or the tool's own credentials are too broad | Containment is always Enforce (tested); the matrix can't drop a mode as criticality rises; no credentials in this slice. End-state tests will use credentials scoped to a disposable test account only | Partly done |
+| **E**levation of privilege | Yes | Generated guardrails are too permissive (a missing exemption check, a wrong condition, an unresolved parameter), or the tool's own credentials are too broad | Containment is always Enforce; the matrix can't drop a mode as criticality rises; a missing parameter or decision fails the run; every generated guardrail has positive, negative and exemption vectors through the local evaluator, and mutation checks show the vectors catch broken exemptions and operator semantics. The evaluator isn't calibrated against the IAM policy simulator yet, so a pass means "as intended". No credentials in this slice; end-state tests will use credentials scoped to a disposable test account only | Partly done |
 
 Agentic and LLM risks: no model is called yet. When reasoning stages arrive,
 walk prompt injection (fetched docs steering mappings), excessive agency and
