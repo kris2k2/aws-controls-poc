@@ -14,6 +14,7 @@
   },
   "maker": "analyst-a",
   "checker": "analyst-b",
+  "data_classification": "Internal Restricted",
   "break_glass_principals": [
     "arn:aws:iam::*:role/BreakGlass-*"
   ],

@@ -20,6 +20,16 @@ DEFAULT_FRAMEWORK_PROFILE = "baseline"
 # The profile's region policy: ca-central-1 and eu-west-1 open org-wide;
 # us-east-1 only through exceptions discovered in Resolve.
 DEFAULT_ALLOWED_REGIONS = ("ca-central-1", "eu-west-1")
+# The lowest criticality each data classification implies. A classification
+# raises the declared (or default) criticality, never lowers it. Internal
+# Restricted is the classification behind the Moderate default (decided
+# 2026-10-30). Labels above it are deliberately absent until their criticality
+# is decided, so a request using one fails instead of being guessed.
+CLASSIFICATION_CRITICALITY = {
+    "Public": Criticality.LOW,
+    "Internal": Criticality.LOW,
+    "Internal Restricted": Criticality.MODERATE,
+}
 
 _ACCOUNT_ID = re.compile(r"^\d{12}$")
 _REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d$")
@@ -65,6 +75,8 @@ class OnboardingRequest:
     control_registry: dict | None = None
     criticality: Criticality = Criticality.MODERATE
     data_classification: str | None = None
+    # Where the criticality came from: "declared", "default", or "raised by data classification".
+    criticality_source: str = "default"
     regulatory_profile: str = DEFAULT_REGULATORY_PROFILE
     jurisdictions: tuple[str, ...] = ()
     allowed_regions: tuple[str, ...] = DEFAULT_ALLOWED_REGIONS
@@ -116,6 +128,15 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
     tier = _enum(Tier, data.get("maturity_tier"), "maturity_tier", problems)
     criticality = _enum(Criticality, data.get("criticality"), "criticality", problems,
                         default=Criticality.MODERATE)
+    criticality_source = "declared" if data.get("criticality") is not None else "default"
+    classification = data.get("data_classification")
+    if isinstance(classification, str) and classification.strip():
+        implied = CLASSIFICATION_CRITICALITY.get(classification)
+        if implied is None:
+            problems.append(f"data_classification {classification!r} has no criticality mapping; "
+                            f"known: {', '.join(CLASSIFICATION_CRITICALITY)}")
+        elif criticality is not None and implied > criticality:
+            criticality, criticality_source = implied, "raised by data classification"
 
     run_mode = data.get("run_mode", "new")
     if run_mode not in RUN_MODES:
@@ -214,6 +235,7 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         org_state=org_state, run_mode=run_mode, preview_accounts=preview_accounts,
         non_production_attested=attested, target_scope=target_scope, control_registry=registry,
         criticality=criticality, data_classification=data.get("data_classification"),
+        criticality_source=criticality_source,
         regulatory_profile=data.get("regulatory_profile") or DEFAULT_REGULATORY_PROFILE,
         jurisdictions=jurisdictions, allowed_regions=regions,
         framework_profile=data.get("framework_profile") or DEFAULT_FRAMEWORK_PROFILE,

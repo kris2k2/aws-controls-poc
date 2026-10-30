@@ -174,6 +174,12 @@ class JourneyTest(unittest.TestCase):
         self.assertEqual(sel["next_tier"]["retires"], ["ATH-C-01"])
         self.assertEqual(len(sel["next_tier"]["adds"]), 8)
 
+    def test_criticality_comes_from_the_internal_restricted_assumption(self):
+        for tier in TIERS:
+            _, sel, _, _ = self.tier(tier)
+            self.assertEqual((sel["data_classification"], sel["criticality"], sel["criticality_source"]),
+                             ("Internal Restricted", "Moderate", "default"), tier)
+
     def test_private_preview_guardrails_hold(self):
         self.check_vectors("private-preview", Vectors.CONTAINMENT)
 

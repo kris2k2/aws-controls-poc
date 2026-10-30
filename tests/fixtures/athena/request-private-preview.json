@@ -2,17 +2,31 @@
   "service": "Amazon Athena",
   "maturity_tier": "Private Preview",
   "run_mode": "new",
-  "preview_accounts": ["111122223333"],
+  "preview_accounts": [
+    "111122223333"
+  ],
   "non_production_attested": true,
   "org_state": {
     "organization_id": "o-exampleorgid",
-    "vpc_endpoints": {"athena": ["vpce-0example1111111111"]},
+    "vpc_endpoints": {
+      "athena": [
+        "vpce-0example1111111111"
+      ]
+    },
     "ous": [],
     "policies": []
   },
   "maker": "analyst-a",
   "checker": "analyst-b",
-  "break_glass_principals": ["arn:aws:iam::*:role/BreakGlass-*"],
-  "capabilities_excluded": ["federated and cross-account data catalogs", "Spark notebooks and sessions"],
-  "decisions": {"network_perimeter": "vpc-endpoint"}
+  "data_classification": "Internal Restricted",
+  "break_glass_principals": [
+    "arn:aws:iam::*:role/BreakGlass-*"
+  ],
+  "capabilities_excluded": [
+    "federated and cross-account data catalogs",
+    "Spark notebooks and sessions"
+  ],
+  "decisions": {
+    "network_perimeter": "vpc-endpoint"
+  }
 }

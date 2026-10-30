@@ -7,7 +7,7 @@ the spec's `report.md` layout where they apply.
 | | |
 |---|---|
 | Date | 2026-10-30 |
-| Requests | `tests/fixtures/athena/request-{private-preview,contained,hardened}.json` (synthetic org `o-exampleorgid`, preview account `111122223333`, criticality Moderate) |
+| Requests | `tests/fixtures/athena/request-{private-preview,contained,hardened}.json` (synthetic org `o-exampleorgid`, preview account `111122223333`, data classification Internal Restricted, criticality Moderate) |
 | Candidate controls | `tests/fixtures/athena/findings.json`: 21 candidates, hand-written in place of Assess |
 | API contract | AWS service reference snapshot, `tests/fixtures/service-reference/2026-10-30/` |
 | Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_acceptance.py` (Resolve) |
@@ -163,7 +163,7 @@ ATH-H-06 becomes Enforce with override:
 | F5 | Athena isn't RCP-supported; S3 and KMS are. | Verified | Dependency containment controls are in scope from Private Preview, as shared controls (ORG-C-02, ORG-C-03). |
 | F6 | VPC-endpoint-only access is a decision: it blocks the console from outside the VPC. | Implemented | New request field `decisions.network_perimeter`. A missing decision fails Select; `not-applicable` excludes ATH-C-04 with the reason recorded. |
 | F7 | Regional availability isn't checked yet. | Open | Planned in Resolve. |
-| F8 | `data_classification` has no mapping to criticality. | Open | Spec decision needed. |
+| F8 | `data_classification` had no mapping to criticality. | Partly decided | Internal Restricted is the classification behind the Moderate default (decided 2026-10-30); Public and Internal imply Low. A classification raises criticality, never lowers it. Labels above Internal Restricted (for example Confidential, the spec's own example) still need a decision; a request using one fails until then. |
 | F9 | **S3 requests made through Athena can't be restricted by `aws:SourceVpce` or `aws:SourceIp`.** | Verified, new | An S3 network perimeter must exempt calls via Athena (`aws:CalledVia`). Recorded as a blind spot on ATH-C-04. |
 | F10 | **The preview restriction must retire on promotion**, but the spec says tiers are cumulative. | Implemented | `until_tier` on a candidate: the control applies until that tier, and the next tier's `selection.json` lists it as retired. |
 | F11 | Most supervision controls are Enforce with override with no guardrail. "Override" then only means the Sentinel soft-mandatory path. | Open | Confirm this is the intended meaning for configuration controls. |
