@@ -8,6 +8,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 
+from .catalog import CATALOG_URL, PINNED_INDEX, CatalogError, build_index, fetch_index, load_index
 from .controls import FindingsError, load_findings
 from .generate import GenerateError, generate
 from .request import RequestError, parse_request
@@ -76,7 +77,7 @@ def _read_json(path: Path):
 def cmd_select(args) -> int:
     request = _load_request(args.request)
     findings = load_findings(_read_json(Path(args.findings)))
-    result = select(findings, request)
+    result = select(findings, request, load_index(Path(args.catalog)))
     run = Path(args.out)
     # A re-run must not leave control records from an earlier selection behind.
     for stale in (run / "controls").glob("*.json"):
@@ -106,6 +107,20 @@ def cmd_generate(args) -> int:
     return 0
 
 
+def cmd_catalog(args) -> int:
+    if args.source:
+        # A local copy of the OSCAL catalog; record where it came from.
+        raw = Path(args.source).read_bytes()
+        index = build_index(raw, args.source_url or CATALOG_URL, args.retrieved)
+    else:
+        index = fetch_index()
+    _write_json(Path(args.out), index)
+    withdrawn = sum(1 for c in index["controls"].values() if c["withdrawn"])
+    print(f"Wrote {args.out}: NIST SP 800-53 {index['version']} (last modified {index['last_modified']}), "
+          f"{len(index['controls'])} controls and enhancements, {withdrawn} withdrawn")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="onboard", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -124,7 +139,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("request", help="request JSON file")
     p.add_argument("--findings", required=True, help="findings.json from Assess")
     p.add_argument("--out", required=True, help="run output directory")
+    p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
     p.set_defaults(func=cmd_select)
+
+    p = sub.add_parser("catalog", help="build the NIST SP 800-53 Rev 5 catalog index from NIST's OSCAL catalog")
+    p.add_argument("--out", required=True, help="index file to write (the pinned one is catalogs/nist-sp-800-53-rev5.json)")
+    p.add_argument("--source", help="a local copy of the OSCAL catalog JSON instead of fetching it")
+    p.add_argument("--source-url", help="where the local copy was downloaded from (default: NIST's catalog URL)")
+    p.add_argument("--retrieved", help="when the local copy was downloaded (ISO 8601)")
+    p.set_defaults(func=cmd_catalog)
 
     p = sub.add_parser("generate", help="Generate stage: write organization policies and generation.json")
     p.add_argument("request", help="request JSON file")
@@ -134,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError) as exc:
+    except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError,
+            CatalogError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
