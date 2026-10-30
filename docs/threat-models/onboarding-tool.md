@@ -23,9 +23,13 @@ deploys nothing and needs no AWS credentials for what exists today.
                                  +--writes--> [run directory: capability-profile.json, ...]
                                  |
                                  +--reads (optional)--> [local snapshot of the service reference]
+                                 |
+                                 +--reads--> [pinned NIST SP 800-53 index, catalogs/]
+                                 |
+                                 +--HTTPS, only on `onboard catalog` (allowlisted host and path)--> [NIST OSCAL catalog]
 ```
 
-Trust boundaries: (1) the network: AWS responses are untrusted data; (2) the
+Trust boundaries: (1) the network: AWS and NIST responses are untrusted data; (2) the
 request file, written by the analyst but validated as untrusted input;
 (3) the run directory: what the checker reviews and approves.
 
@@ -34,6 +38,7 @@ request file, written by the analyst but validated as untrusted input;
 | Data | Classification | Stored where | Retention |
 |---|---|---|---|
 | AWS service reference (actions, resources, condition keys) | public | run directory, snapshots | per run |
+| NIST SP 800-53 Rev 5 catalog index (ids, labels, titles, withdrawn status) | public | `catalogs/` (committed, reviewed) | until the next refresh PR |
 | Onboarding request: account IDs, OU names, org policies, maker/checker identities | internal (confidential once real org state is used) | analyst's machine, run directory | per run; never committed |
 | Generated controls (later stages) | internal | run directory | per run |
 
@@ -41,8 +46,8 @@ request file, written by the analyst but validated as untrusted input;
 
 | Threat | Applies? | Scenario | Mitigation | Status |
 |---|---|---|---|---|
-| **S**poofing | Yes | A spoofed or redirected source serves a fake IAM contract | HTTPS only; host allowlist checked before the request and after redirects; no credentials in URLs | Done (`check_url`, tests) |
-| **T**ampering | Yes | A service reference index entry points to another host; a source changes between review and use | Per-service URLs re-checked against the allowlist; every source recorded with URL, version and retrieval time; snapshots for replay. Manifest hashes come with Validate | Partly done |
+| **S**poofing | Yes | A spoofed or redirected source serves a fake IAM contract or a fake NIST catalog | HTTPS only; host allowlist (and, for NIST, the `usnistgov/oscal-content` path) checked before the request and after redirects; no credentials in URLs | Done (`check_url`, `check_catalog_url`, tests) |
+| **T**ampering | Yes | A service reference index entry points to another host; a source changes between review and use; the NIST index is edited to admit a made-up or withdrawn identifier | Per-service URLs re-checked against the allowlist; every source recorded with URL, version and retrieval time; snapshots for replay. The NIST index records the SHA-256 of NIST's file and is committed, so a refresh or an edit shows up in review, and runs record which catalog they used. Manifest hashes come with Validate | Partly done |
 | **R**epudiation | Yes | Nobody can show who approved an enforcing control | Maker and checker required and must differ. Approvals over a hashed manifest come with Validate | Partly done |
 | **I**nformation disclosure | Yes | Real org state or account IDs committed with fixtures or run outputs | Fixtures are synthetic (AWS documentation account ID); run outputs live outside the repo; the PII and secret scans run on every commit | Done for this slice |
 | **D**enial of service | Low | A huge or slow response stalls a run | 30 s timeout, 32 MB response cap; failures stop the run with a clear error | Done |

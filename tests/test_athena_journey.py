@@ -23,6 +23,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from onboard.catalog import load_index
 from onboard.cli import main, snapshot_fetcher
 from onboard.controls import load_findings
 from onboard.evaluator import Request, evaluate
@@ -36,6 +37,7 @@ from tests.test_athena_acceptance import SNAPSHOT
 
 FIXTURES = Path(__file__).parent / "fixtures" / "athena"
 TIERS = ("private-preview", "contained", "hardened")
+CATALOG = load_index()  # the pinned NIST SP 800-53 index in catalogs/
 
 PREVIEW = "111122223333"
 OTHER = "444455556666"   # an organization account not on the preview list
@@ -73,7 +75,7 @@ def run_tier(tier, registry=None, criticality=None, exceptions=None):
         data["exceptions"] = exceptions
     request = parse_request(data)
     findings = load_findings(load("findings.json"))
-    selected = select(findings, request)
+    selected = select(findings, request, CATALOG)
     generated = generate(findings, selected["controls"], request)
     return request, selected, generated
 
@@ -285,6 +287,18 @@ class JourneyTest(unittest.TestCase):
                 self.assertTrue(rec["detective_platforms"])
                 self.assertTrue(any(r["framework"] == "NIST-SP-800-53" and r["version"] == "r5"
                                     for r in rec["framework_refs"]))
+
+    def test_nist_references_resolve_in_the_pinned_catalog(self):
+        for tier in TIERS:
+            _, sel, controls, _ = self.tier(tier)
+            self.assertEqual((sel["nist_catalog"]["version"], sel["nist_catalog"]["source_sha256"]),
+                             ("5.2.0", CATALOG["source_sha256"]), tier)
+            for cid, rec in controls.items():
+                for ref in rec["framework_refs"]:
+                    if ref["framework"] == "NIST-SP-800-53":
+                        entry = CATALOG["controls"][ref["id"]]
+                        self.assertFalse(entry["withdrawn"], f"{tier} {cid} {ref['id']}")
+                        self.assertEqual((ref["label"], ref["title"]), (entry["label"], entry["title"]))
 
     def test_guardrail_athena_actions_exist_in_the_api_contract(self):
         profile = resolve("Amazon Athena", ServiceReference(snapshot_fetcher(SNAPSHOT)))

@@ -12,6 +12,7 @@ import copy
 from typing import Mapping
 
 from . import __version__
+from .catalog import check_refs, summary as catalog_summary
 from .controls import detective_platforms
 from .model import (
     DEFAULT_MATRIX, ControlClass, Criticality, Mode, Severity, Tier, escalate, in_scope,
@@ -50,9 +51,21 @@ def _all_inferred(candidate: dict) -> bool:
     return all(r["mapping_type"] == "inferred" for r in candidate["framework_refs"])
 
 
-def select(findings: dict, request: OnboardingRequest,
+def select(findings: dict, request: OnboardingRequest, catalog: dict,
            matrix: Mapping[Severity, Mapping[Criticality, Mode]] = DEFAULT_MATRIX) -> dict:
-    """Return {"selection": ..., "controls": {id: record}, "registry": ...}."""
+    """Return {"selection": ..., "controls": {id: record}, "registry": ...}.
+
+    Every NIST SP 800-53 reference on every candidate must resolve in `catalog`
+    (the pinned OSCAL index); any that doesn't fails the run before anything
+    is selected.
+    """
+    problems, resolved_refs = [], {}
+    for cand in findings["candidates"]:
+        found, resolved_refs[cand["control_id"]] = check_refs(cand["control_id"], cand["framework_refs"], catalog)
+        problems += found
+    if problems:
+        raise SelectError("NIST SP 800-53 references don't resolve in the pinned catalog:\n  - "
+                          + "\n  - ".join(problems))
     tier, criticality = request.maturity_tier, request.criticality
     registry = copy.deepcopy(request.control_registry or {"controls": {}})
     registry.setdefault("controls", {})
@@ -89,6 +102,7 @@ def select(findings: dict, request: OnboardingRequest,
 
         mode = modes[criticality]
         record = copy.deepcopy(cand)
+        record["framework_refs"] = resolved_refs[cid]
         record["mode_by_criticality"] = {c.value: m.value for c, m in modes.items()}
         record["mode"] = mode.value
         record["detective_platforms"] = detective_platforms(cand)
@@ -126,6 +140,7 @@ def select(findings: dict, request: OnboardingRequest,
         "criticality_source": request.criticality_source,
         "data_classification": request.data_classification,
         "run_mode": request.run_mode,
+        "nist_catalog": catalog_summary(catalog),
         "controls": sorted(controls),
         "counts": counts,
         "excluded_by_decision": excluded,

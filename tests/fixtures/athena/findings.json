@@ -17,15 +17,17 @@
       "control_id": "ORG-C-01",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "SC-7",
+          "id": "sc-7",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-4",
+          "id": "ac-4",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -97,15 +99,17 @@
       ],
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-4",
+          "id": "ac-4",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "SC-7",
+          "id": "sc-7",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -177,15 +181,17 @@
       ],
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-3",
+          "id": "ac-3",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-4",
+          "id": "ac-4",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -251,15 +257,17 @@
       "control_id": "ATH-C-01",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-3",
+          "id": "ac-3",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-7",
+          "id": "cm-7",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -321,15 +329,17 @@
       "control_id": "ATH-C-02",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-4",
+          "id": "ac-4",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-7",
+          "id": "cm-7",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -381,15 +391,17 @@
       "control_id": "ATH-C-03",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-7",
+          "id": "cm-7",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-4",
+          "id": "ac-4",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -460,8 +472,9 @@
       "control_id": "ATH-C-04",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "SC-7",
+          "id": "sc-7",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -525,8 +538,9 @@
       "control_id": "ORG-S-01",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AU-9",
+          "id": "au-9",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -579,15 +593,17 @@
       "control_id": "ORG-S-02",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AU-9",
+          "id": "au-9",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-8",
+          "id": "cm-8",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -651,8 +667,9 @@
       "control_id": "ATH-S-01",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-6",
+          "id": "cm-6",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -702,8 +719,9 @@
       "control_id": "ATH-S-02",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "SC-28",
+          "id": "sc-28",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -753,8 +771,9 @@
       "control_id": "ATH-S-03",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AU-12",
+          "id": "au-12",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -840,8 +859,9 @@
       "control_id": "ATH-S-04",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-8",
+          "id": "cm-8",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -891,8 +911,9 @@
       "control_id": "ATH-S-05",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AC-3",
+          "id": "ac-3",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -935,15 +956,17 @@
       "control_id": "ATH-S-06",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "SI-4",
+          "id": "si-4",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
         },
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "AU-6",
+          "id": "au-6",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -993,8 +1016,9 @@
       "control_id": "ATH-H-01",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-8",
+          "id": "cm-8",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -1045,8 +1069,9 @@
       "control_id": "ATH-H-02",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-8",
+          "id": "cm-8",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -1098,8 +1123,9 @@
       "control_id": "ATH-H-03",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "SI-2",
+          "id": "si-2",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -1149,8 +1175,9 @@
       "control_id": "ATH-H-04",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-8",
+          "id": "cm-8",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -1193,8 +1220,9 @@
       "control_id": "ATH-H-05",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "SC-5",
+          "id": "sc-5",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -1237,8 +1265,9 @@
       "control_id": "ATH-H-06",
       "framework_refs": [
         {
+          "catalog_version": "5.2.0",
           "framework": "NIST-SP-800-53",
-          "id": "CM-8",
+          "id": "cm-8",
           "mapping_type": "inferred",
           "verification": "not-run",
           "version": "r5"
@@ -1320,5 +1349,5 @@
   ],
   "schema": "findings/v1",
   "service": "athena",
-  "simulated": "Hand-written stand-in for the Assess stage. Facts with verification 'verified' were checked against the cited AWS page on 2026-10-30; framework mappings are inferred and the verification pass has not run."
+  "simulated": "Hand-written stand-in for the Assess stage. Facts with verification 'verified' were checked against the cited AWS page on 2026-10-30; framework mappings are inferred and the verification pass has not run; NIST SP 800-53 identifiers resolve in the pinned OSCAL catalog (5.2.0)."
 }

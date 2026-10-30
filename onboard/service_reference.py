@@ -44,12 +44,13 @@ def check_url(url: str) -> str:
     return url
 
 
-def http_fetch(url: str) -> bytes:
-    request = urllib.request.Request(check_url(url), headers={"Accept": "application/json"})
+def http_fetch(url: str, check: Callable[[str], str] = check_url) -> bytes:
+    """GET a JSON document; `check` guards the URL before the request and after redirects."""
+    request = urllib.request.Request(check(url), headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310 - URL checked above
             # A redirect could leave the allowlisted host; check where we ended up.
-            check_url(response.geturl())
+            check(response.geturl())
             body = response.read(MAX_BYTES + 1)
     except OSError as exc:
         raise SourceError(f"could not fetch {url}: {exc}") from exc
