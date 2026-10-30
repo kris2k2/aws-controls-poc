@@ -1,0 +1,72 @@
+name: governance-sync
+
+# Weekly: propose the newest governance release in the installed major
+# version as a pull request. A new major version is only taken when run by
+# hand with "allow-major" ticked, after reading its breaking changes.
+on:
+  schedule:
+    - cron: "41 13 * * 1"  # Mondays; off the hour to avoid the scheduler rush
+  workflow_dispatch:
+    inputs:
+      allow-major:
+        description: Move to a new major version
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write       # push the governance/sync branch
+      pull-requests: write  # open or update its pull request
+      actions: write        # start CI on it: pushes made with GITHUB_TOKEN don't trigger workflows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: true  # this job pushes the sync branch
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - name: Sync .governance/
+        id: sync
+        env:
+          GOVERNANCE_TOKEN: ${{ secrets.GOVERNANCE_READ_TOKEN }}
+          ALLOW_MAJOR: ${{ inputs.allow-major && '--allow-major' || '' }}
+        run: |
+          python .governance/tools/governance.py sync --ref latest ${ALLOW_MAJOR} \
+            --notes-file "${RUNNER_TEMP}/notes.md"
+          echo "version=$(python .governance/tools/governance.py version)" >> "${GITHUB_OUTPUT}"
+          if [[ -n "$(git status --porcelain)" ]]; then echo "changed=true" >> "${GITHUB_OUTPUT}"; fi
+
+      # The sync branch belongs to this workflow and is rebuilt from the
+      # default branch on every run, so it is force-pushed.
+      - name: Open or update the pull request
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.sync.outputs.version }}
+        run: |
+          branch="governance/sync"
+          title="chore(governance): sync to v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "${branch}"
+          git add -A
+          git commit -q -m "${title}"
+          git push --force origin "${branch}"
+          if [[ "$(gh pr view "${branch}" --json state --jq .state 2>/dev/null)" == "OPEN" ]]; then
+            gh pr edit "${branch}" --title "${title}" --body-file "${RUNNER_TEMP}/notes.md"
+          else
+            gh pr create --head "${branch}" --title "${title}" --body-file "${RUNNER_TEMP}/notes.md"
+          fi
+          gh workflow run governance.yml --ref "${branch}"

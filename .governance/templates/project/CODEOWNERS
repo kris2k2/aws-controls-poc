@@ -1,0 +1,8 @@
+# Governance and agent configuration need the owner's review, so agents can't
+# change their own rules unreviewed. Enable "Require review from Code Owners"
+# in the branch protection for main.
+/.governance/   @{{OWNER}}
+/AGENTS.md      @{{OWNER}}
+/CLAUDE.md      @{{OWNER}}
+/.claude/       @{{OWNER}}
+/.github/       @{{OWNER}}

@@ -1,0 +1,635 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  GitHub Actions CI bootstrap: OIDC trust, a CI role that can only deploy the
+  project's stacks through a CloudFormation execution role, and a permissions
+  boundary on both that scopes them to the project's services and stops them
+  from altering this bootstrap or escaping the boundary. Deployed by a human
+  administrator, never by CI: once in the primary region (ca-central-1), and
+  with RegionalAssetsOnly=true under the same stack name in each other region
+  the project deploys to (e.g. us-east-1).
+  See standards/security/aws-ci-bootstrap.md.
+
+# Project-specific inputs are deliberately few: who may assume the CI role
+# (GitHub org/repo/subject), a name prefix, which services the project's stacks
+# manage, and optionally what CI does directly (e.g. upload a built site).
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Project }
+        Parameters: [ProjectName, AllowedActions, AllowedRegions, RegionalAssetsOnly, EnableImageAssets]
+      - Label: { default: GitHub }
+        Parameters: [GitHubOrg, GitHubRepo, GitHubOwnerId, GitHubRepositoryId, SubjectFilter, ExistingOidcProviderArn]
+      - Label: { default: CI }
+        Parameters: [CiDirectActions, CiDirectResources, MaxSessionDuration]
+
+Parameters:
+  ProjectName:
+    Type: String
+    AllowedPattern: "^[a-z][a-z0-9-]{1,22}[a-z0-9]$"
+    Description: >-
+      Lowercase project slug, 3-24 characters (it's part of the asset bucket name). CI may only manage CloudFormation stacks named
+      "<ProjectName>" or "<ProjectName>-*", and IAM roles/policies/instance
+      profiles under the "/<ProjectName>/" path.
+  AllowedActions:
+    Type: CommaDelimitedList
+    Default: "cloudformation:*,iam:*,lambda:*,apigateway:*,dynamodb:*,s3:*,logs:*,events:*,scheduler:*,sqs:*,sns:*,states:*,cloudwatch:*,xray:*,ssm:*Parameter*,ssm:AddTagsToResource,ssm:RemoveTagsFromResource,ssm:ListTagsForResource"
+    Description: >-
+      IAM actions the project's stacks manage (service:* or narrower). The
+      CloudFormation execution role gets these; the boundary allows nothing
+      else. Include "iam:*" only if the stacks define IAM roles; the guard
+      rails below still apply.
+  AllowedRegions:
+    Type: CommaDelimitedList
+    Default: "ca-central-1,us-east-1"
+    Description: >-
+      Regions the project may use. ca-central-1 is the default home region;
+      us-east-1 is the alternate, for what must live there (CloudFront
+      certificates and WAF, services not offered in Canada) or as a backup.
+      Empty means this stack's region only.
+  RegionalAssetsOnly:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      false: the full bootstrap (OIDC, roles, boundary, and this region's asset
+      store), deployed once in the primary region. true: only this region's
+      asset store, for each additional region the project deploys to. Use the
+      same stack name in every region.
+  EnableImageAssets:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Also create an ECR repository for CDK Docker image assets.
+  GitHubOrg:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9-]+$"
+    Description: GitHub organization or user that owns the repository.
+  GitHubRepo:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9._-]+$"
+    Description: Repository name (without the org).
+  GitHubOwnerId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^[0-9]*$"
+    Description: >-
+      Numeric owner ID. Repositories created, renamed or transferred after
+      2026-07-15, or opted in, use immutable subjects
+      "repo:OWNER@OWNER_ID/REPO@REPO_ID:...". Get both IDs with
+      gh api repos/OWNER/REPO --jq '.owner.id, .id'. Leave both empty only
+      for an older repository still on name-only subjects.
+  GitHubRepositoryId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^[0-9]*$"
+    Description: Numeric repository ID (see GitHubOwnerId).
+  SubjectFilter:
+    Type: String
+    Default: "environment:production"
+    AllowedPattern: "^(?!pull_request)[A-Za-z0-9:/._*-]+$"
+    Description: >-
+      Suffix of the OIDC "sub" claim allowed to assume the CI role, after
+      "repo:<repo>:". Prefer a protected GitHub environment
+      ("environment:production"); "ref:refs/heads/main" also works. Never a
+      pattern matching pull requests.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of an existing token.actions.githubusercontent.com OIDC provider. An
+      account can hold only one; leave empty to create it in this stack.
+  CiDirectActions:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      Actions CI performs itself, outside CloudFormation, such as
+      "s3:PutObject,s3:DeleteObject,s3:ListBucket,cloudfront:CreateInvalidation".
+      Empty means CI only deploys stacks.
+  CiDirectResources:
+    Type: CommaDelimitedList
+    Default: "*"
+    Description: >-
+      Resource ARNs (wildcards allowed) the CiDirectActions apply to, e.g.
+      "arn:aws:s3:::shop-*-site,arn:aws:s3:::shop-*-site/*".
+  MaxSessionDuration:
+    Type: Number
+    Default: 3600
+    MinValue: 3600
+    MaxValue: 43200
+    Description: >-
+      CI credential lifetime in seconds. Raise it (e.g. 7200) when a first
+      deploy waits on slow resources such as a CloudFront distribution.
+
+Rules:
+  GitHubIdsGivenTogether:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref GitHubOwnerId, ""]
+            - !Equals [!Ref GitHubRepositoryId, ""]
+          - !And
+            - !Not [!Equals [!Ref GitHubOwnerId, ""]]
+            - !Not [!Equals [!Ref GitHubRepositoryId, ""]]
+        AssertDescription: Set both GitHubOwnerId and GitHubRepositoryId, or neither.
+  DeployedInAnAllowedRegion:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Join ["", !Ref AllowedRegions], ""]
+          - !Contains [!Ref AllowedRegions, !Ref "AWS::Region"]
+        AssertDescription: Deploy the bootstrap in one of AllowedRegions (primary first, ca-central-1 by default).
+  SubjectIsNotAWildcard:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SubjectFilter, "*"]]
+        AssertDescription: SubjectFilter "*" would let any branch or pull request deploy.
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
+  ThisRegionOnly: !Equals [!Join ["", !Ref AllowedRegions], ""]
+  UseImmutableSubject: !Not [!Equals [!Ref GitHubRepositoryId, ""]]
+  HasDirectActions: !Not [!Equals [!Join ["", !Ref CiDirectActions], ""]]
+  CreateAccountResources: !Equals [!Ref RegionalAssetsOnly, "false"]
+  CreateOidcProviderHere: !And [!Condition CreateAccountResources, !Condition CreateOidcProvider]
+  CreateImageRepository: !Equals [!Ref EnableImageAssets, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProviderHere
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: managed-by, Value: ci-bootstrap }
+
+  # Where CDK publishes file assets (Lambda code, templates) for this region.
+  # SSE-S3 rather than KMS keeps idle cost at zero.
+  AssetBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-assets-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: managed-by, Value: ci-bootstrap }
+
+  AssetBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt AssetBucket.Arn, !Sub "${AssetBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # Where CDK publishes Docker image assets for this region (optional).
+  AssetRepository:
+    Type: AWS::ECR::Repository
+    Condition: CreateImageRepository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-assets"
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Keep the 30 most recent images (rollback headroom)",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":30},
+          "action":{"type":"expire"}}]}
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LambdaPullsImagesForThisAccount
+            Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Condition:
+              StringLike:
+                aws:sourceArn: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:*"
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: managed-by, Value: ci-bootstrap }
+
+  # ARNs of the bootstrap's own resources are spelled out (not !Ref'd) so the
+  # boundary can refer to itself and to the execution role.
+  CiBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: CreateAccountResources
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-ci-boundary"
+      Path: /bootstrap/
+      Description: !Sub "Permissions boundary for ${ProjectName} CI, its execution role, and every role they create."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ProjectServices
+            Effect: Allow
+            Action: !Ref AllowedActions
+            Resource: "*"
+
+          - Sid: DeployMechanics
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DeleteStack
+              - cloudformation:Describe*
+              - cloudformation:List*
+              - cloudformation:Get*
+              - cloudformation:ValidateTemplate
+              - iam:PassRole
+              - sts:GetCallerIdentity
+              - ecr:GetAuthorizationToken
+            Resource: "*"
+
+          # Asset stores: broad here, narrowed by ProtectAssetStores below and
+          # by each role's own policy.
+          - Sid: ProjectAssets
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation, ecr:*]
+            Resource:
+              - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-assets-${AWS::AccountId}-*"
+              - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-assets-${AWS::AccountId}-*/*"
+              - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-assets"
+
+          - !If
+            - HasDirectActions
+            - Sid: CiDirectActions
+              Effect: Allow
+              Action: !Ref CiDirectActions
+              Resource: "*"
+            - !Ref AWS::NoValue
+
+          - Sid: StayInAllowedRegions
+            Effect: Deny
+            # Global services (called through us-east-1 endpoints).
+            NotAction:
+              - iam:*
+              - sts:*
+              - cloudfront:*
+              - route53:*
+              - support:*
+              - health:*
+              - budgets:*
+              - ce:*
+            Resource: "*"
+            Condition:
+              StringNotEquals:
+                aws:RequestedRegion: !If [ThisRegionOnly, [!Ref "AWS::Region"], !Ref AllowedRegions]
+
+          # IAM writes only on the project's own path. This also covers the
+          # bootstrap's roles and boundary (path /bootstrap/), the OIDC provider,
+          # users, groups, and account settings, none of which may be touched.
+          - Sid: IamWritesOnlyUnderProjectPath
+            Effect: Deny
+            Action:
+              - iam:Add*
+              - iam:Attach*
+              - iam:Change*
+              - iam:Create*
+              - iam:Deactivate*
+              - iam:Delete*
+              - iam:Detach*
+              - iam:Enable*
+              - iam:Put*
+              - iam:Remove*
+              - iam:Reset*
+              - iam:Resync*
+              - iam:Set*
+              - iam:Tag*
+              - iam:Untag*
+              - iam:Update*
+              - iam:Upload*
+            NotResource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/*"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${ProjectName}/*"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/${ProjectName}/*"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/*"
+
+          # Passing a role hands its permissions to a service; only bounded
+          # roles may be passed: the project's own, and the execution role.
+          - Sid: PassOnlyBoundedRoles
+            Effect: Deny
+            Action: iam:PassRole
+            NotResource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/*"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/bootstrap/${ProjectName}-cfn-exec"
+
+          # Every role created or changed carries this same boundary, so no
+          # role made by the project can do more than the project itself.
+          - Sid: RolesOnlyWithThisBoundary
+            Effect: Deny
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePermissionsBoundary
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+            Resource: "*"
+            Condition:
+              StringNotEquals:
+                iam:PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/bootstrap/${ProjectName}-ci-boundary"
+
+          - Sid: BoundaryCannotBeRemoved
+            Effect: Deny
+            Action:
+              - iam:DeleteRolePermissionsBoundary
+              - iam:DeleteUserPermissionsBoundary
+            Resource: "*"
+
+          - Sid: AssumeOnlyProjectRoles
+            Effect: Deny
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+              - sts:SetSourceIdentity
+            NotResource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/*"
+
+          # CloudFormation writes only on the project's stacks (plus AWS
+          # transforms such as SAM). Never on this bootstrap stack.
+          - Sid: StacksOnlyWithProjectName
+            Effect: Deny
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:DeleteStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:UpdateTerminationProtection
+              - cloudformation:ContinueUpdateRollback
+              - cloudformation:CancelUpdateStack
+              - cloudformation:RollbackStack
+              - cloudformation:SignalResource
+              - cloudformation:TagResource
+              - cloudformation:UntagResource
+              - cloudformation:CreateStackRefactor
+              - cloudformation:ExecuteStackRefactor
+            NotResource:
+              - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}/*"
+              - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}-*/*"
+              - !Sub "arn:${AWS::Partition}:cloudformation:*:aws:transform/*"
+
+          # The bootstrap stack is deployed under one name in every region.
+          - Sid: ProtectThisBootstrapStack
+            Effect: Deny
+            Action: cloudformation:*
+            Resource: !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${AWS::StackName}/*"
+
+          - Sid: ProtectAssetStores
+            Effect: Deny
+            Action:
+              - s3:DeleteBucket*
+              - s3:PutBucket*
+              - s3:PutEncryptionConfiguration
+              - s3:PutLifecycleConfiguration
+              - ecr:DeleteRepository*
+              - ecr:SetRepositoryPolicy
+              - ecr:PutLifecyclePolicy
+              - ecr:PutImageTagMutability
+              - ecr:PutImageScanningConfiguration
+            Resource:
+              - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-assets-${AWS::AccountId}-*"
+              - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-assets"
+
+          # StackSets and registry types run under their own execution roles,
+          # which would sidestep this boundary.
+          - Sid: NoStackSetsOrRegistryTypes
+            Effect: Deny
+            Action:
+              - cloudformation:*StackSet*
+              - cloudformation:*StackInstances
+              - cloudformation:RegisterType
+              - cloudformation:DeregisterType
+              - cloudformation:ActivateType
+              - cloudformation:DeactivateType
+              - cloudformation:PublishType
+              - cloudformation:SetTypeConfiguration
+              - cloudformation:SetTypeDefaultVersion
+              - cloudformation:RegisterPublisher
+            Resource: "*"
+
+          - Sid: NoAccountOrGuardrailTampering
+            Effect: Deny
+            Action:
+              - organizations:*
+              - account:*
+              - cloudtrail:DeleteTrail
+              - cloudtrail:StopLogging
+              - cloudtrail:UpdateTrail
+              - cloudtrail:PutEventSelectors
+              - config:DeleteConfigurationRecorder
+              - config:DeleteDeliveryChannel
+              - config:StopConfigurationRecorder
+              - guardduty:DeleteDetector
+              - guardduty:DisassociateFromAdministratorAccount
+              - guardduty:UpdateDetector
+              - securityhub:DisableSecurityHub
+              - access-analyzer:DeleteAnalyzer
+              - budgets:ModifyBudget
+              - budgets:DeleteBudgetAction
+            Resource: "*"
+
+  # Holds the permissions to manage the project's resources. Only
+  # CloudFormation can assume it, and only the CI role can hand it over.
+  CfnExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: CreateAccountResources
+    Properties:
+      RoleName: !Sub "${ProjectName}-cfn-exec"
+      Path: /bootstrap/
+      Description: !Sub "CloudFormation execution role for ${ProjectName} stacks."
+      PermissionsBoundary: !Ref CiBoundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" }
+      Policies:
+        - PolicyName: project-resources
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ProjectResources
+                Effect: Allow
+                Action: !Ref AllowedActions
+                Resource: "*"
+              # Lambda and other services read published assets as this role.
+              - Sid: ReadPublishedAssets
+                Effect: Allow
+                Action: [s3:GetObject, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-assets-${AWS::AccountId}-*/*"
+                  - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-assets"
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: managed-by, Value: ci-bootstrap }
+
+  # Assumed by GitHub Actions through OIDC. It holds no resource permissions:
+  # it deploys stacks only through the execution role, plus CiDirectActions.
+  CiRole:
+    Type: AWS::IAM::Role
+    Condition: CreateAccountResources
+    Properties:
+      RoleName: !Sub "${ProjectName}-github-ci"
+      Path: /bootstrap/
+      Description: !Sub "Assumed by GitHub Actions in ${GitHubOrg}/${GitHubRepo} via OIDC."
+      MaxSessionDuration: !Ref MaxSessionDuration
+      PermissionsBoundary: !Ref CiBoundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !If
+                  - UseImmutableSubject
+                  - !Sub "repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepositoryId}:${SubjectFilter}"
+                  - !Sub "repo:${GitHubOrg}/${GitHubRepo}:${SubjectFilter}"
+      Policies:
+        - PolicyName: deploy-through-execution-role
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ChangeStacksOnlyAsExecutionRole
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteStack
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}/*"
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}-*/*"
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:aws:transform/*"
+                Condition:
+                  StringEquals:
+                    cloudformation:RoleArn: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/bootstrap/${ProjectName}-cfn-exec"
+              # ExecuteChangeSet takes no role ARN; every change set CI can
+              # create (above) runs as the execution role.
+              - Sid: ExecuteAndInspectProjectStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ListChangeSets
+                  - cloudformation:ListStackResources
+                  - cloudformation:GetTemplate
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}/*"
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}-*/*"
+              - Sid: TemplateTools
+                Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:GetTemplateSummary
+                  - sts:GetCallerIdentity
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              # CDK (cdk deploy) and large templates publish here first.
+              - Sid: PublishAssets
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-assets-${AWS::AccountId}-*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-assets-${AWS::AccountId}-*/*"
+                  - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-assets"
+              - Sid: PassExecutionRoleToCloudFormation
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/bootstrap/${ProjectName}-cfn-exec"
+                Condition:
+                  StringEquals: { iam:PassedToService: cloudformation.amazonaws.com }
+              - !If
+                - HasDirectActions
+                - Sid: CiDirectActions
+                  Effect: Allow
+                  Action: !Ref CiDirectActions
+                  Resource: !Ref CiDirectResources
+                - !Ref AWS::NoValue
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: managed-by, Value: ci-bootstrap }
+
+Outputs:
+  AssetBucketName:
+    Description: CDK file assets for this region (projectSynthesizer in project-guardrails.ts).
+    Value: !Ref AssetBucket
+  CiRoleArn:
+    Condition: CreateAccountResources
+    Description: GitHub variable for role-to-assume in aws-actions/configure-aws-credentials.
+    Value: !GetAtt CiRole.Arn
+  CfnExecutionRoleArn:
+    Condition: CreateAccountResources
+    Description: Pass as --role-arn on every CloudFormation deploy.
+    Value: !GetAtt CfnExecutionRole.Arn
+  BoundaryArn:
+    Condition: CreateAccountResources
+    Description: Set as PermissionsBoundary on every IAM role the project defines.
+    Value: !Ref CiBoundary
+  ProjectRolePath:
+    Condition: CreateAccountResources
+    Description: Set as Path on every IAM role, policy, and instance profile the project defines.
+    Value: !Sub "/${ProjectName}/"
+  StackNames:
+    Condition: CreateAccountResources
+    Description: Project stacks must be named this, or start with it followed by "-".
+    Value: !Ref ProjectName
+  TrustedSubject:
+    Condition: CreateAccountResources
+    Description: OIDC subject the CI role accepts (compare with the "sub" in the workflow's token).
+    Value: !If
+      - UseImmutableSubject
+      - !Sub "repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepositoryId}:${SubjectFilter}"
+      - !Sub "repo:${GitHubOrg}/${GitHubRepo}:${SubjectFilter}"

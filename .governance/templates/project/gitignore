@@ -1,0 +1,13 @@
+# Lines the governance baseline adds to .gitignore (secrets and local agent settings)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+.git-credentials
+.claude/settings.local.json
+CLAUDE.local.md
+__pycache__/

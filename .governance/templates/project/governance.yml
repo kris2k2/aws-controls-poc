@@ -1,0 +1,43 @@
+name: governance
+
+# Runs the governance baseline's checks from .governance/ (managed; updated by
+# governance-sync). Keep this file small: the checks themselves live in
+# .governance/tools/governance.py so they update with the baseline.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]  # edited: the PR title is checked
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # full history for gitleaks and the per-commit scans
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - name: Install governance tooling (hash-pinned)
+        run: python -m pip install --disable-pip-version-check --require-hashes -r .governance/tools/requirements.txt
+
+      - name: Governance checks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          GOVERNANCE_TOKEN: ${{ secrets.GOVERNANCE_READ_TOKEN }}
+        run: python .governance/tools/governance.py ci

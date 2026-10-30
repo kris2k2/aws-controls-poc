@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keeps SHA-pinned actions current. Add the project's own ecosystems
+  # (npm, pip, ...) below. .governance/ is updated by governance-sync, not here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

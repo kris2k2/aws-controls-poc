@@ -1,0 +1,13 @@
+# Governance baseline (.governance/templates/project/gitignore)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+.git-credentials
+.claude/settings.local.json
+CLAUDE.local.md
+__pycache__/
