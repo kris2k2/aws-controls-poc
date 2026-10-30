@@ -11,3 +11,8 @@ credentials.json
 .claude/settings.local.json
 CLAUDE.local.md
 __pycache__/
+
+# Tool runs and local source snapshots (may hold real org state)
+runs/
+snapshots/
+*.egg-info/

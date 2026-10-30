@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onboard"
+version = "0.1.0"
+description = "Assess one AWS service from its API contract and generate a fact-checked control set."
+readme = "README.md"
+requires-python = ">=3.13"
+# Standard library only; see docs/adr/0001-python-stdlib-staged-pipeline.md.
+dependencies = []
+
+[project.scripts]
+onboard = "onboard.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["onboard*"]
