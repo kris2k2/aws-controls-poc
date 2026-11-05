@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import argparse
+from argparse import Namespace
 import datetime as dt
 import json
+import shutil
 import sys
 import urllib.parse
 from pathlib import Path
 
+from . import __version__
 from .assess import AssessError, assess
 from .catalog import CATALOG_URL, PINNED_INDEX, CatalogError, build_index, fetch_index, load_index
 from .control_catalog import (REGION as CATALOG_REGION, ControlCatalog, http_transport, recording_transport,
                               snapshot_metadata, snapshot_transport)
 from .controls import FindingsError, load_findings
+from .deliver import DeliverError, check_delivery, deliver, manifest_sha256
 from .generate import GenerateError, generate
 from .request import RequestError, parse_request
 from .resolve import ResolveError, resolve
@@ -174,7 +178,8 @@ def cmd_verify(args) -> int:
 REVIEW_EXIT = {"release": 0, "hold": 3, "blocked": 4}
 
 
-def cmd_review(args) -> int:
+def _review(args) -> tuple[dict, list[Path]]:
+    """Run Review for `args.run`, write review.json, and return the result and the evidence files used."""
     request = _load_request(args.request)
     run = Path(args.run)
     files, problems = load_run(run)
@@ -193,7 +198,112 @@ def cmd_review(args) -> int:
           f"wrote {run / 'review.json'}")
     for blocker in result["blockers"]:
         print(f"  blocker {blocker['check']}: {blocker['subject']}: {blocker['detail']}")
+    return result, paths
+
+
+def cmd_review(args) -> int:
+    result, _ = _review(args)
     return REVIEW_EXIT[result["decision"]]
+
+
+def cmd_deliver(args) -> int:
+    # Review again here: a review.json already in the run is never trusted (ADR-0008).
+    result, evidence = _review(args)
+    run = Path(args.run)
+    if result["decision"] != "release":
+        if result["decision"] == "hold":
+            print(f"Not delivered: {result['counts']['needs acceptance']} doubts need a person. Fill in "
+                  f"acceptance_template in {run / 'review.json'} (not as the maker) and pass it with --acceptances.")
+        else:
+            print("Not delivered: the run is blocked; fix it and run again.")
+        return REVIEW_EXIT[result["decision"]]
+    out = Path(args.delivery) if args.delivery else run / "delivery"
+    manifest = deliver(result, run, out, request_bytes=Path(args.request).read_bytes(),
+                       acceptances_bytes=Path(args.acceptances).read_bytes() if args.acceptances else None,
+                       evidence={p.name: p.read_bytes() for p in evidence})
+    print(f"DELIVERED: {len(manifest['policies'])} policies ({manifest['service']} at {manifest['maturity_tier']}, "
+          f"policy set {manifest['policy_set_sha256'][:12]}) to {out}; manifest sha256 {manifest_sha256(out)}")
+    return 0
+
+
+def cmd_check_delivery(args) -> int:
+    bundle = Path(args.bundle)
+    problems = check_delivery(bundle)
+    for problem in problems:
+        print(f"  {problem}")
+    if problems:
+        print(f"FAIL: {bundle} is not an intact released bundle")
+        return 4
+    print(f"OK: {bundle} is intact and released; manifest sha256 {manifest_sha256(bundle)}")
+    return 0
+
+
+class RunError(ValueError):
+    pass
+
+
+# Files and directories the pipeline writes into a run, so a re-run starts clean.
+RUN_OUTPUTS = ("capability-profile.json", "findings.json", "assessment.json", "selection.json", "registry.json",
+               "generation.json", "verification.json", "review.json", "run.json")
+RUN_OUTPUT_DIRS = ("controls", "org-policies", "delivery")
+
+
+def _clean_run(run: Path) -> None:
+    if not run.exists() or not any(run.iterdir()):
+        return
+    if not (run / "run.json").is_file():
+        raise RunError(f"{run} holds files but no run.json: pass a new directory or one `onboard run` wrote")
+    for name in RUN_OUTPUTS:
+        (run / name).unlink(missing_ok=True)
+    for name in RUN_OUTPUT_DIRS:
+        if (run / name).is_dir():
+            shutil.rmtree(run / name)
+
+
+RUN_RESULT = {0: "delivered", 3: "hold", 4: "blocked"}
+
+
+def cmd_run(args) -> int:
+    """The whole cycle for one service: Resolve, Assess, Select, Generate, Verify, Review, Deliver."""
+    _load_request(args.request)  # fail before touching the run directory
+    run = Path(args.out)
+    _clean_run(run)
+    run.mkdir(parents=True, exist_ok=True)
+    common = {"request": args.request, "catalog": args.catalog}
+    stages = (
+        ("resolve", cmd_resolve, Namespace(request=args.request, out=str(run), snapshot=args.snapshot)),
+        ("assess", cmd_assess, Namespace(**common, run=str(run), overlay=args.overlay,
+                                         control_catalog_snapshot=args.control_catalog_snapshot,
+                                         record_snapshot=args.record_snapshot)),
+        ("select", cmd_select, Namespace(**common, findings=str(run / "findings.json"), out=str(run))),
+        ("generate", cmd_generate, Namespace(request=args.request, run=str(run))),
+        ("verify", cmd_verify, Namespace(request=args.request, run=str(run))),
+        ("review and deliver", cmd_deliver, Namespace(**common, run=str(run), evidence=args.evidence,
+                                                      acceptances=args.acceptances, delivery=None)),
+    )
+    log = {"schema": "run/v1", "tool_version": __version__, "service": None, "stages": [], "result": None}
+
+    def finish(result: str, code: int) -> int:
+        log["result"] = result
+        if result == "delivered":
+            log["delivery"] = {"path": "delivery", "manifest_sha256": manifest_sha256(run / "delivery")}
+        _write_json(run / "run.json", log)
+        return code
+
+    for name, func, stage_args in stages:
+        print(f"== {name}")
+        try:
+            code = func(stage_args)
+        except Exception as exc:
+            log["stages"].append({"stage": name, "exit": 2, "error": str(exc).splitlines()[0][:300]})
+            finish("failed", 2)
+            raise
+        log["stages"].append({"stage": name, "exit": code})
+        if name == "assess":
+            log["service"] = json.loads((run / "findings.json").read_text(encoding="utf-8"))["service"]
+        if code != 0:
+            return finish(RUN_RESULT.get(code, "failed") if name == "review and deliver" else "failed", code)
+    return finish("delivered", 0)
 
 
 def cmd_catalog(args) -> int:
@@ -272,10 +382,38 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
     p.set_defaults(func=cmd_review)
 
+    p = sub.add_parser("deliver", help="Review the run again and, on release, seal it into a delivery bundle "
+                                       "(exit 0 delivered, 3 hold, 4 blocked)")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--run", required=True, help="run directory written by verify")
+    p.add_argument("--delivery", help="bundle directory to write (default: delivery/ in the run); must be new or empty")
+    p.add_argument("--evidence", action="append", help="impact or calibration evidence (evidence/v1); repeatable")
+    p.add_argument("--acceptances", help="human acceptances of earlier doubts (acceptances/v1)")
+    p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
+    p.set_defaults(func=cmd_deliver)
+
+    p = sub.add_parser("check-delivery", help="check a delivery bundle is intact and released (exit 0 ok, 4 not)")
+    p.add_argument("bundle", help="delivery bundle directory")
+    p.set_defaults(func=cmd_check_delivery)
+
+    p = sub.add_parser("run", help="the whole cycle for one service: resolve, assess, select, generate, verify, "
+                                   "review and deliver (exit 0 delivered, 3 hold, 4 blocked or failed proof)")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--out", required=True, help="run directory: new, empty, or one `onboard run` wrote (re-run clean)")
+    p.add_argument("--snapshot", help="read the service reference from this directory instead of AWS")
+    p.add_argument("--overlay", help="the analyst's candidates and dependencies (findings-overlay/v1)")
+    source = p.add_mutually_exclusive_group()
+    source.add_argument("--control-catalog-snapshot", help="replay the Control Catalog from this snapshot directory")
+    source.add_argument("--record-snapshot", help="also save the live Control Catalog responses to this directory")
+    p.add_argument("--evidence", action="append", help="impact or calibration evidence (evidence/v1); repeatable")
+    p.add_argument("--acceptances", help="human acceptances of the doubts a previous run held on (acceptances/v1)")
+    p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
+    p.set_defaults(func=cmd_run)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
     except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError,
-            CatalogError, VerifyError, AssessError) as exc:
+            CatalogError, VerifyError, AssessError, DeliverError, RunError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
