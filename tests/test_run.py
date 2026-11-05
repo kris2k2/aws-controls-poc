@@ -48,6 +48,7 @@ class RunTest(unittest.TestCase):
         cls.run_dir = tmp / "athena"
         cls.first = run_cycle(cls.run_dir)
         cls.held = load(cls.run_dir / "run.json")
+        cls.held_report = (cls.run_dir / "report.html").read_text(encoding="utf-8")
         cls.acceptances = accept(cls.run_dir / "review.json", tmp / "acceptances.json")
         cls.second = run_cycle(cls.run_dir, acceptances=cls.acceptances)
         cls.bundle = cls.run_dir / "delivery"
@@ -83,6 +84,15 @@ class RunTest(unittest.TestCase):
         self.assertEqual((self.bundle / "request.json").read_bytes(), REQUEST.read_bytes())
         for evidence in ("verification.json", "selection.json", "findings.json", "assessment.json"):
             self.assertTrue((self.bundle / evidence).is_file(), evidence)
+
+    def test_every_outcome_gets_a_report_and_the_bundle_seals_it(self):
+        self.assertEqual(self.held["report"], "report.html")  # the first run held, and still has one
+        self.assertIn("On hold", self.held_report)
+        bundled = (self.bundle / "report.html").read_bytes()
+        self.assertEqual(bundled, (self.run_dir / "report.html").read_bytes())
+        self.assertIn(b"Released", bundled)
+        self.assertIn("report.html", load(self.bundle / "manifest.json")["files"])
+        self.assertEqual(check_delivery(self.bundle), [])
 
     def test_the_bundle_holds_exactly_the_reviewed_detective_artifacts(self):
         manifest, review = load(self.bundle / "manifest.json"), load(self.bundle / "review.json")

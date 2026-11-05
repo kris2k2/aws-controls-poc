@@ -19,6 +19,7 @@ from .control_catalog import (REGION as CATALOG_REGION, ControlCatalog, http_tra
 from .controls import FindingsError, load_findings
 from .deliver import DeliverError, check_delivery, deliver, manifest_sha256
 from .generate import GenerateError, generate
+from .report import ReportError, load as load_report, render as render_report
 from .request import RequestError, parse_request
 from .resolve import ResolveError, resolve
 from .review import ACCEPTANCES_SCHEMA, EVIDENCE_SCHEMA, load_optional, load_run, review
@@ -226,11 +227,26 @@ def cmd_deliver(args) -> int:
             print("Not delivered: the run is blocked; fix it and run again.")
         return REVIEW_EXIT[result["decision"]]
     out = Path(args.delivery) if args.delivery else run / "delivery"
+    # The bundle's report shows this review, not whatever review.json held before.
+    report = render_report(load_report(run, review=result)).encode("utf-8")
     manifest = deliver(result, run, out, request_bytes=Path(args.request).read_bytes(),
                        acceptances_bytes=Path(args.acceptances).read_bytes() if args.acceptances else None,
-                       evidence={p.name: p.read_bytes() for p in evidence})
+                       evidence={p.name: p.read_bytes() for p in evidence}, report_bytes=report)
     print(f"DELIVERED: {len(manifest['policies'])} policies ({manifest['service']} at {manifest['maturity_tier']}, "
           f"policy set {manifest['policy_set_sha256'][:12]}) to {out}; manifest sha256 {manifest_sha256(out)}")
+    return 0
+
+
+def write_report(run: Path, out: Path | None = None) -> Path:
+    out = out or run / "report.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_report(load_report(run)), encoding="utf-8")
+    return out
+
+
+def cmd_report(args) -> int:
+    out = write_report(Path(args.run), Path(args.out) if args.out else None)
+    print(f"Wrote {out}")
     return 0
 
 
@@ -252,7 +268,7 @@ class RunError(ValueError):
 
 # Files and directories the pipeline writes into a run, so a re-run starts clean.
 RUN_OUTPUTS = ("capability-profile.json", "findings.json", "assessment.json", "selection.json", "registry.json",
-               "generation.json", "verification.json", "review.json", "run.json")
+               "generation.json", "verification.json", "review.json", "run.json", "report.html")
 RUN_OUTPUT_DIRS = ("controls", "org-policies", "detective", "delivery")
 
 
@@ -295,6 +311,13 @@ def cmd_run(args) -> int:
         log["result"] = result
         if result == "delivered":
             log["delivery"] = {"path": "delivery", "manifest_sha256": manifest_sha256(run / "delivery")}
+        # The report shows whatever the run reached, held and blocked runs included.
+        if (run / "generation.json").is_file():
+            try:
+                log["report"] = write_report(run).name
+                print(f"== report: {run / 'report.html'}")
+            except Exception as exc:  # the report never hides the run's own result or error
+                log["report_error"] = str(exc).splitlines()[0][:300] if str(exc) else type(exc).__name__
         _write_json(run / "run.json", log)
         return code
 
@@ -404,6 +427,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("bundle", help="delivery bundle directory")
     p.set_defaults(func=cmd_check_delivery)
 
+    p = sub.add_parser("report", help="Report: write report.html, a visual summary of the service, its threat "
+                                      "vectors and implemented guardrails, from a run directory")
+    p.add_argument("--run", required=True, help="run directory written by select and generate (and verify, review)")
+    p.add_argument("--out", help="where to write the report (default: report.html in the run)")
+    p.set_defaults(func=cmd_report)
+
     p = sub.add_parser("run", help="the whole cycle for one service: resolve, assess, select, generate, verify, "
                                    "review and deliver (exit 0 delivered, 3 hold, 4 blocked or failed proof)")
     p.add_argument("request", help="request JSON file")
@@ -422,6 +451,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError,
-            CatalogError, VerifyError, AssessError, DeliverError, RunError) as exc:
+            CatalogError, VerifyError, AssessError, DeliverError, RunError, ReportError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -9,6 +9,7 @@ writes `delivery/` only when that result is `release`:
   hashed for the review;
 - `detective/...`: the released Config rules, EventBridge detections and
   Sentinel policies (ADR-0009), byte for byte as the review hashed them;
+- `report.html`: the visual summary of this review's run (ADR-0010);
 - the evidence behind the decision: `review.json`, `verification.json`,
   `selection.json`, `findings.json`, `assessment.json` (if Assess ran),
   `capability-profile.json`, the request, and the acceptances and evidence
@@ -58,7 +59,8 @@ def _file_sha256(data: bytes) -> str:
 
 
 def deliver(review: dict, run: Path, out: Path, *, request_bytes: bytes,
-            acceptances_bytes: bytes | None = None, evidence: dict[str, bytes] | None = None) -> dict:
+            acceptances_bytes: bytes | None = None, evidence: dict[str, bytes] | None = None,
+            report_bytes: bytes | None = None) -> dict:
     """Write the bundle for a released run to `out` and return its manifest."""
     if review.get("decision") != "release":
         raise DeliverError(f"the review decided {review.get('decision')!r}: only a release is delivered")
@@ -95,6 +97,8 @@ def deliver(review: dict, run: Path, out: Path, *, request_bytes: bytes,
     files["request.json"] = request_bytes
     if acceptances_bytes is not None:
         files["acceptances.json"] = acceptances_bytes
+    if report_bytes is not None:
+        files["report.html"] = report_bytes
     for i, (name, raw) in enumerate(sorted((evidence or {}).items()), 1):
         files[f"evidence/{i:02d}-{Path(name).name}"] = raw
 
