@@ -242,17 +242,18 @@ class Property:
     resources: Patterns = ("*",)
     reads: tuple[str, ...] = ()           # dimensions deny_when reads besides principal
     deny_when: Callable = field(default=lambda r, f: True)
+    break_glass_exempt: bool = True       # False: break-glass is held to this control too
 
     def patterns(self, facts: Facts) -> tuple[list[str], list[str], list[str]]:
         get = lambda v: list(v(facts) if callable(v) else v)  # noqa: E731
         return get(self.actions), get(self.not_actions), get(self.resources)
 
 
-def trusted(principal: Principal, facts: Facts, exceptions: tuple[str, ...]) -> bool:
+def trusted(principal: Principal, facts: Facts, exceptions: tuple[str, ...], break_glass: bool = True) -> bool:
     """Exempt by design: an organization principal that is break-glass or holds an approved exception."""
     if not principal.in_org or principal.arn is None:
         return False
-    return any(matches(p, principal.arn) for p in facts.break_glass + exceptions)
+    return any(matches(p, principal.arn) for p in (facts.break_glass if break_glass else ()) + exceptions)
 
 
 def _in_scope(patterns: tuple[list, list, list], action: str, resource: str) -> bool:
@@ -267,7 +268,7 @@ def _in_scope(patterns: tuple[list, list, list], action: str, resource: str) -> 
 def property_denies(prop: Property, point: dict, facts: Facts, exceptions: tuple[str, ...]) -> bool:
     if not _in_scope(prop.patterns(facts), point["action"], point["resource"]):
         return False
-    if trusted(point["principal"], facts, exceptions):
+    if trusted(point["principal"], facts, exceptions, prop.break_glass_exempt):
         return False
     return bool(prop.deny_when(View(point, prop.reads), facts))
 

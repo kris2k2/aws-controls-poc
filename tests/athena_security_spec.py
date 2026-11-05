@@ -11,12 +11,14 @@ Conventions:
 - `deny_when(r, f)` reads the request `r` (only the dimensions in `reads`, plus
   `r.principal`) and the request's facts `f` (`adversary.Facts`).
 - Break-glass principals, and approved exceptions for Enforce-with-override
-  controls, are exempt from every property, but only while they are
+  controls, are exempt from every property except the data perimeter
+  (ORG-C-02, ORG-C-03, `break_glass_exempt=False`), and only while they are
   organization principals (`adversary.trusted`). That exemption is safe only
   because ORG-C-04 stops anyone else creating, changing or passing those roles.
-- The accepted risks below are the gaps left open on purpose. Each is pinned
-  by a request that must stay allowed, so closing or widening a gap shows up
-  as a failing test and the register gets revisited.
+- The accepted risks below are the gaps left open on purpose. Each states its
+  reach (who can use it and from where), is pinned by a request that must stay
+  allowed, and lists boundary requests that must stay denied. Closing or
+  widening a gap shows up as a failing test and the register gets revisited.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from pathlib import Path
 
 from tests.adversary import CONSTRAINS_PRINCIPALS as PRINCIPALS
 from tests.adversary import CONSTRAINS_RESOURCES as RESOURCES
-from tests.adversary import Property
+from tests.adversary import OTHER_ORG, Property
 
 ACTION_REVIEW = json.loads((Path(__file__).parent / "fixtures" / "athena" / "action-review.json").read_text())
 
@@ -55,10 +57,10 @@ PROPERTIES = (
              not_actions=GLOBAL_SERVICES, reads=("region",),
              deny_when=lambda r, f: r.region not in f.allowed_regions),
     Property("ORG-C-02", "Organization principals reach only organization S3 resources", PRINCIPALS,
-             actions=("s3:*",), reads=("resource_org",),
+             actions=("s3:*",), reads=("resource_org",), break_glass_exempt=False,
              deny_when=lambda r, f: r.resource_org != f.org_id),
     Property("ORG-C-03", "Only organization principals (or AWS services) reach S3 and KMS resources", RESOURCES,
-             actions=("s3:*", "kms:*"),
+             actions=("s3:*", "kms:*"), break_glass_exempt=False,
              deny_when=lambda r, f: not r.principal.service and r.principal.org_id != f.org_id),
     Property("ORG-C-04", "Only break-glass principals change or pass break-glass and exception roles", PRINCIPALS,
              actions=ROLE_CHANGES, resources=lambda f: f.protected_roles),
@@ -91,6 +93,8 @@ class AcceptedRisk:
     status: str
     tiers: tuple[str, ...]
     request: dict  # overrides on adversary.default_point; must stay allowed
+    reach: str     # who can use the gap, and from where
+    boundary: tuple[tuple[dict, str], ...] = ()  # (overrides, Sid): requests that must stay denied
 
 
 _PROPOSED = "proposed: needs security team sign-off"
@@ -103,7 +107,12 @@ ACCEPTED_RISKS = (
         "Services calling Athena never arrive through the organization's endpoint; denying them breaks "
         "CloudFormation and other integrations. The caller still needs IAM permission for the call.",
         "security-team", _PROPOSED, ("private-preview", "contained", "hardened"),
-        {"action": "athena:StartQueryExecution", "vpce": None, "via": True}),
+        {"action": "athena:StartQueryExecution", "vpce": None, "via": True},
+        reach="Organization principals only (SCPs bind no one else), but from any network: someone outside it "
+              "holding a stolen organization credential can reach Athena through a service, limited to what that "
+              "service does with Athena. The data perimeter still applies on that path.",
+        boundary=(({"action": "s3:PutObject", "vpce": None, "via": True, "resource_org": OTHER_ORG}, "ORGC02"),
+                  ({"principal": "external", "action": "s3:GetObject", "vpce": None, "via": True}, "ORGC03"))),
     AcceptedRisk(
         "AR-02", ("ATH-C-03",),
         "Workgroups with the Spark engine can still be created: the API contract has no condition key for the "
@@ -111,18 +120,33 @@ ACCEPTED_RISKS = (
         "Such a workgroup is inert, because starting sessions and calculations and creating or editing notebooks "
         "are denied. The Sentinel policy is meant to catch it in Terraform plans.",
         "security-team", _PROPOSED, ("private-preview", "contained", "hardened"),
-        {"action": "athena:CreateWorkGroup", "tag": "cc-0001"}),
+        {"action": "athena:CreateWorkGroup", "tag": "cc-0001"},
+        reach="Organization principals only. Contained: the workgroup can't run Spark.",
+        boundary=(({"action": "athena:StartSession"}, "ATHC03"),
+                  ({"action": "athena:StartCalculationExecution"}, "ATHC03"))),
     AcceptedRisk(
         "AR-03", ("ORG-C-01",),
         "Global services (IAM, Organizations, STS, Route 53, CloudFront, Support) are not region-restricted.",
         "Their endpoints don't follow the requested region; denying them outside the allowed regions breaks them.",
         "security-team", _PROPOSED, ("private-preview", "contained", "hardened"),
-        {"action": "iam:ListRoles", "region": "us-west-2"}),
+        {"action": "iam:ListRoles", "region": "us-west-2"},
+        reach="Organization principals only, but not contained to the allowed regions: global services serve "
+              "from everywhere (CloudFront caches at edge locations worldwide), which matters where personal "
+              "data must stay in Canada. Only the global services the allow-list opens are reachable; this "
+              "organization's allow-list opens IAM, STS and Organizations reads, not CloudFront or Route 53.",
+        boundary=(({"action": "athena:StartQueryExecution", "region": "us-west-2"}, "ORGC01"),)),
     AcceptedRisk(
         "AR-04", ("ORG-S-01",),
-        "Break-glass principals are exempt from every guardrail, including the ones protecting CloudTrail.",
+        "Break-glass principals are exempt from every guardrail except the data perimeter, including the ones "
+        "protecting CloudTrail.",
         "Break-glass access exists to recover from the guardrails themselves. ORG-C-04 stops anyone else "
         "creating, changing or passing those roles; their use is meant to be detected (ATH-S-06, pending).",
         "security-team", _PROPOSED, ("contained", "hardened"),
-        {"action": "cloudtrail:StopLogging", "principal": "break-glass"}),
+        {"action": "cloudtrail:StopLogging", "principal": "break-glass"},
+        reach="Break-glass sessions only, but who can start one is set by the break-glass roles' trust "
+              "policies, which this tool neither generates nor checks: a trust policy naming an outside account "
+              "or an external identity provider brings outsiders in. ORG-C-04 stops organization members from "
+              "changing those trust policies, not what is already in them; the management account isn't bound "
+              "by SCPs. Break-glass is held to the data perimeter, so it can't move data out of the organization.",
+        boundary=(({"action": "s3:PutObject", "principal": "break-glass", "resource_org": OTHER_ORG}, "ORGC02"),)),
 )

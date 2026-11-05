@@ -7,7 +7,9 @@ detections, Sentinel policies and boundaries are reported as pending, not
 silently skipped.
 
 What each mode does to a guardrail (spec, "What each mode does per artifact"):
-Enforce deploys the deny with an exemption for break-glass principals only;
+Enforce deploys the deny with an exemption for break-glass principals only
+(none when the guardrail sets `break_glass_exempt: false`, as the data
+perimeter does);
 Enforce with override deploys it only when approved exceptions exist, naming
 them in the condition; Advise and Report deploy no guardrail.
 """
@@ -84,7 +86,7 @@ def statement(record: dict, request: OnboardingRequest, params: dict) -> tuple[d
     guardrail = record["guardrail"]
     if not mode.enforcing:
         return None, f"{mode.value}: guardrails are deployed only for enforcing modes"
-    exempt = list(request.break_glass_principals)
+    exempt = list(request.break_glass_principals) if guardrail.get("break_glass_exempt", True) else []
     if mode is Mode.ENFORCE_WITH_OVERRIDE:
         approved = [e.principal for e in request.exceptions if e.control_id == cid]
         if not approved:

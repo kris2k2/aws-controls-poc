@@ -231,8 +231,6 @@ def _account_of(arn):
 EQUIVALENT_MUTANTS = {
     ("ORG-C-02", r"(drop BoolIfExists|change BoolIfExists to Bool on) aws:PrincipalIsAWSService"):
         "SCPs never apply to AWS service principals, so the condition is always true where the SCP applies",
-    ("ORG-C-03", r"drop (\S+ from )?ArnNotLike aws:PrincipalArn"):
-        "break-glass principals are organization principals, which ORG-C-03 never denies: the exemption is inert",
     ("ORG-C-03", r"change BoolIfExists to Bool on aws:PrincipalIsAWSService"):
         "the model always sets aws:PrincipalIsAWSService; calibration against AWS should confirm it is always present",
     ("ATH-C-04", r"change BoolIfExists to Bool on aws:ViaAWSService"):
@@ -281,6 +279,8 @@ class AcceptedRiskTest(AdversarialTestCase):
         overrides = dict(overrides)
         if overrides.get("principal") == "break-glass":
             overrides["principal"] = role(_account_of(sc.facts.break_glass[0]), "BreakGlass-Responder", ORG)
+        elif overrides.get("principal") == "external":
+            overrides["principal"] = role(EXTERNAL_ACCOUNT, "analyst", adversary.OTHER_ORG)
         return overrides
 
     def test_register_entries_are_complete(self):
@@ -288,7 +288,7 @@ class AcceptedRiskTest(AdversarialTestCase):
         self.assertEqual(len(ids), len(set(ids)))
         for risk in ACCEPTED_RISKS:
             with self.subTest(risk=risk.id):
-                self.assertTrue(risk.risk and risk.why and risk.owner and risk.status and risk.tiers)
+                self.assertTrue(risk.risk and risk.why and risk.reach and risk.owner and risk.status and risk.tiers)
                 self.assertLessEqual(set(risk.controls), set(BY_CONTROL))
 
     def test_each_accepted_gap_is_open_exactly_as_registered(self):
@@ -305,6 +305,16 @@ class AcceptedRiskTest(AdversarialTestCase):
                         if cid in sc.active():
                             self.assertFalse(adversary.property_denies(BY_CONTROL[cid], point, sc.facts, ()),
                                              f"the spec for {cid} doesn't leave {risk.id} open")
+
+    def test_each_accepted_gap_stops_at_its_registered_boundary(self):
+        for risk in ACCEPTED_RISKS:
+            for tier in risk.tiers:
+                sc = self.scenarios[tier]
+                for overrides, sid in risk.boundary:
+                    with self.subTest(risk=risk.id, tier=tier, boundary=overrides.get("action")):
+                        decision = sc.decide(**self.resolve(sc, overrides))
+                        self.assertEqual((decision.allowed, decision.statement), (False, sid),
+                                         f"{risk.id} reaches further than registered")
 
 
 # --- Named attacks, end to end -------------------------------------------------------
@@ -337,6 +347,9 @@ ATTACKS = (
      "ATHC01"),
     ("A14", "private-preview", "an organization role reads an S3 object owned outside the organization",
      {"action": "s3:GetObject", "resource_org": "o-otherorgid"}, "ORGC02"),
+    ("A15", "hardened", "a break-glass session copies data to an S3 bucket outside the organization",
+     {"principal": role(PREVIEW, "BreakGlass-Responder", ORG), "action": "s3:PutObject",
+      "resource_org": "o-otherorgid"}, "ORGC02"),
 )
 
 
@@ -352,7 +365,7 @@ class NamedAttackTest(AdversarialTestCase):
         for account in (PREVIEW, OTHER):
             principal = role(account, "BreakGlass-Responder", ORG)
             for action, resource in (("cloudtrail:StopLogging", "*"), ("athena:StartSession", "*"),
-                                     ("iam:UpdateAssumeRolePolicy", BREAK_GLASS_ROLE)):
+                                     ("iam:UpdateAssumeRolePolicy", BREAK_GLASS_ROLE), ("s3:GetObject", "*")):
                 with self.subTest(account=account, action=action):
                     self.assertTrue(sc.decide(principal=principal, action=action, resource=resource).allowed)
 

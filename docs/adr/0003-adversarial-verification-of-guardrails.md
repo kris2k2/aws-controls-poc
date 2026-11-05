@@ -54,12 +54,18 @@ repository.
    containment control, ORG-C-04, denies the IAM role changes and
    `iam:PassRole` on every exempt role to everyone but break-glass. Guardrails
    can now name `resources`, including the `${protected_roles}` parameter.
+   A guardrail can set `break_glass_exempt: false`; the data perimeter
+   (ORG-C-02, ORG-C-03) does, so break-glass can't move data out of the
+   organization (amended 2026-11-05, after reviewing how far each accepted
+   risk reaches).
 6. **Mutation testing.** The generated statements are mutated the ways a
    generator bug would break them; every mutant must be caught. Mutants that
    are equivalent in the model are listed with the reason, and the test fails
    if one of them starts being caught, so the list stays accurate.
 7. **An accepted-risk register.** Deliberate gaps are pinned by requests that
-   must stay allowed, each with an owner, a reason and a sign-off status.
+   must stay allowed, each with an owner, a reason, a sign-off status, its
+   reach (who can use it and from where), and boundary requests that must
+   stay denied.
 
 Everything stays standard library and offline (ADR-0001). The whole suite runs
 in about a second.
@@ -83,6 +89,12 @@ in about a second.
 - Whenever exemptions exist, an extra SCP statement (ORG-C-04) is deployed.
   It also stops ordinary pipelines from changing exception roles, which is
   intended.
+- Break-glass can no longer write to, or read from, S3 outside the
+  organization. Recovering from a data-perimeter mistake needs a policy
+  change, not a break-glass session.
+- Who can become break-glass is set by the break-glass roles' trust policies,
+  which the tool neither generates nor checks. Until it does, AR-04 reaches
+  whoever those policies admit.
 - The proof means "holds in our model of AWS". Calibrating the evaluator
   against the IAM policy simulator and live calls in a sandbox account is
   still required before it is a claim about AWS. The attacker model must be
