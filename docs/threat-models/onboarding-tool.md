@@ -5,10 +5,10 @@
 | Author | Repository owner, drafted with an AI coding agent |
 | Date | 2026-10-30 |
 | Reviewers | Pending |
-| Related PR / ADR | [ADR-0001](../adr/0001-python-stdlib-staged-pipeline.md), [ADR-0003](../adr/0003-adversarial-verification-of-guardrails.md), [ADR-0004](../adr/0004-baseline-vpc-endpoint-policy.md) |
+| Related PR / ADR | [ADR-0001](../adr/0001-python-stdlib-staged-pipeline.md), [ADR-0003](../adr/0003-adversarial-verification-of-guardrails.md), [ADR-0004](../adr/0004-baseline-vpc-endpoint-policy.md), [ADR-0005](../adr/0005-risk-based-release-review.md) |
 
 Scope: the tool as built so far (request validation, the control model, the
-Resolve, Select and Generate stages, and the local policy evaluator). Update this model whenever a stage adds a source, a credential
+Resolve, Select, Generate and Review stages, and the local policy evaluator). Update this model whenever a stage adds a source, a credential
 or a model call.
 
 ## 1. What are we building?
@@ -31,7 +31,10 @@ deploys nothing and needs no AWS credentials for what exists today.
 
 Trust boundaries: (1) the network: AWS and NIST responses are untrusted data; (2) the
 request file, written by the analyst but validated as untrusted input;
-(3) the run directory: what the checker reviews and approves.
+(3) the run directory: what the checker reviews and approves;
+(4) the release decision: `review.json`, which a deployment pipeline will act
+on without a person when it says `release`, and the evidence and acceptance
+files it is computed from.
 
 ### Data handled
 
@@ -51,6 +54,7 @@ request file, written by the analyst but validated as untrusted input;
 | **R**epudiation | Yes | Nobody can show who approved an enforcing control | Maker and checker required and must differ. Approvals over a hashed manifest come with Validate | Partly done |
 | **I**nformation disclosure | Yes | Real org state or account IDs committed with fixtures or run outputs | Fixtures are synthetic (AWS documentation account ID); run outputs live outside the repo; the PII and secret scans run on every commit | Done for this slice |
 | **D**enial of service | Low | A huge or slow response stalls a run | 30 s timeout, 32 MB response cap; failures stop the run with a clear error | Done |
+| **E**levation of privilege | Yes | Someone gets a weak or edited policy set released without a person: editing a policy or control record after generation, supplying fake passing evidence, accepting doubts about their own run, or lowering the release threshold | The reviewer re-runs Select and Generate and blocks on any difference; evidence binds to the SHA-256 of the exact statement (and calibration to the evaluator's source), so changed statements lose it; acceptances bind to a fingerprint of what was doubted, expire, and can't come from the maker; the auto-accept ceiling is a constant changed only by ADR; `review.json` records the hash of the released set. Not done: evidence and acceptance files are checked for content, not authorship, so they must come from authenticated sources (a Verify stage, a reviewed pull request to a protected acceptances file); no deployment pipeline reads `review.json` yet | Partly done (ADR-0005) |
 | **E**levation of privilege | Yes | Generated guardrails are too permissive (a missing exemption check, a wrong condition, an unresolved parameter), or the tool's own credentials are too broad | Containment is always Enforce; the matrix can't drop a mode as criticality rises; a missing parameter or decision fails the run; every generated guardrail has positive, negative and exemption vectors through the local evaluator. Against an attacker (ADR-0003): each statement is checked to deny exactly what its reviewed security property denies, over every combination of an explicit attacker model (bounded proof); every excluded-capability action in the contract is reviewed; break-glass and exception principals are role ARNs in named accounts, protected by ORG-C-04 from anyone else creating, changing or passing them, and break-glass is held to the data perimeter (ORG-C-02, ORG-C-03); a baseline VPC endpoint policy (ADR-0004) stops anyone using the organization's endpoints with outside credentials or none, or reaching resources outside the organization through them, and traffic that bypasses the endpoints is a registered network-layer risk (AR-05); break-glass trust policies are not checked yet; every mutant of every statement is caught; deliberate gaps are pinned in an accepted-risk register with their reach and boundary. The evaluator isn't calibrated against the IAM policy simulator yet, so a pass means "holds in our model of AWS". No credentials in this slice; end-state tests will use credentials scoped to a disposable test account only | Partly done |
 
 Agentic and LLM risks: no model is called yet. When reasoning stages arrive,
@@ -65,7 +69,7 @@ output handling before merge, as ADR-0001 requires.
 
 ## 4. What are we doing about it?
 
-Mitigations are linked above. Open items: manifest hashing and approvals
+Mitigations are linked above. Open items: authenticated evidence and acceptances for the release review, manifest hashing and approvals
 (Validate), the threat-model update for reasoning stages, the
 credential scope for end-state tests, calibrating the evaluator against AWS,
 and security team sign-off of the guardrail spec and accepted risks.
