@@ -84,14 +84,31 @@ class RunTest(unittest.TestCase):
         for evidence in ("verification.json", "selection.json", "findings.json", "assessment.json"):
             self.assertTrue((self.bundle / evidence).is_file(), evidence)
 
+    def test_the_bundle_holds_exactly_the_reviewed_detective_artifacts(self):
+        manifest, review = load(self.bundle / "manifest.json"), load(self.bundle / "review.json")
+        in_run = {p.relative_to(self.run_dir).as_posix(): p.read_bytes()
+                  for p in (self.run_dir / "detective").rglob("*") if p.is_file()}
+        self.assertTrue(in_run)
+        self.assertEqual(sorted(manifest["artifacts"]), sorted(in_run))
+        self.assertEqual(manifest["artifacts"], review["artifacts"])
+        for path, raw in in_run.items():
+            self.assertEqual((self.bundle / path).read_bytes(), raw, path)
+
     def test_a_changed_or_added_file_breaks_the_seal(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for change in ("edit", "add", "remove"):
+            for change in ("edit", "add", "remove", "edit-detection", "add-detection"):
                 with self.subTest(change=change):
                     copy = Path(tmp) / change
                     shutil.copytree(self.bundle, copy)
                     policy = copy / "policies" / "scp-org-guardrails.json"
-                    if change == "edit":
+                    detection = copy / "detective" / "eventbridge" / "ATH-C-03.json"
+                    if change == "edit-detection":
+                        doc = load(detection)
+                        doc["rule"]["EventPattern"]["detail"]["eventName"].pop()
+                        detection.write_text(json.dumps(doc))
+                    elif change == "add-detection":
+                        (detection.parent / "ATH-X-01.json").write_text("{}")
+                    elif change == "edit":
                         doc = load(policy)
                         doc["Statement"].pop()
                         policy.write_text(json.dumps(doc))
@@ -132,6 +149,12 @@ class DeliverGuardTest(unittest.TestCase):
         self.assertEqual(self.deliver_cli("--acceptances", self.acceptances), 4)
         self.assertFalse((self.run_dir / "delivery").exists())
 
+    def test_a_detection_edited_after_review_is_blocked(self):
+        detection = self.run_dir / "detective" / "eventbridge" / "ATH-C-03.json"
+        detection.write_text(detection.read_text().replace("StartSession", "StartSessionX"))
+        self.assertEqual(self.deliver_cli("--acceptances", self.acceptances), 4)
+        self.assertFalse((self.run_dir / "delivery").exists())
+
     def test_the_maker_cannot_accept_their_own_doubts(self):
         own = accept(self.run_dir / "review.json", self.dir / "own.json", by="analyst-a")
         self.assertEqual(self.deliver_cli("--acceptances", own), 3)
@@ -143,6 +166,9 @@ class DeliverGuardTest(unittest.TestCase):
             deliver({**review, "decision": "hold"}, self.run_dir, self.dir / "b1", request_bytes=b"{}")
         with self.assertRaises(DeliverError):  # the policy set changed since the review
             deliver({**review, "policy_set_sha256": "0" * 64}, self.run_dir, self.dir / "b2", request_bytes=b"{}")
+        with self.assertRaisesRegex(DeliverError, "detective artifacts"):  # an artifact changed since the review
+            deliver({**review, "artifacts": {**review["artifacts"], "detective/eventbridge/ATH-C-03.json": "0" * 64}},
+                    self.run_dir, self.dir / "b3", request_bytes=b"{}")
         with self.assertRaises(DeliverError):  # never over an existing bundle
             deliver(review, self.run_dir, self.run_dir / "delivery", request_bytes=b"{}")
         self.assertFalse((self.dir / "b1").exists() or (self.dir / "b2.partial").exists())

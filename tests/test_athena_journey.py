@@ -238,8 +238,13 @@ class JourneyTest(unittest.TestCase):
         _, _, _, generated = self.tier("contained")
         status = generated["report"]["controls"]["ATH-S-01"]
         self.assertEqual(status["scp"]["status"], "not_expressible")
-        self.assertEqual(status["config"]["status"], "pending")
-        self.assertEqual(status["sentinel"]["status"], "pending")
+        self.assertEqual(status["config"], {"status": "generated", "file": "detective/config-rules/ATH-S-01.json"})
+        self.assertEqual(status["sentinel"], {"status": "generated", "file": "detective/sentinel/ath-s-01.sentinel"})
+        rule = json.loads(generated["artifacts"][status["config"]["file"]])["rule"]
+        self.assertEqual(rule["Source"], {"Owner": "AWS",
+                                          "SourceIdentifier": "ATHENA_WORKGROUP_ENFORCE_WORKGROUP_CONFIGURATION"})
+        # Enforce with override at plan time is Sentinel's soft-mandatory level (finding F11).
+        self.assertIn('enforcement_level = "soft-mandatory"', generated["artifacts"]["detective/sentinel/sentinel.hcl"])
 
     def test_shared_controls_are_reused_from_the_registry(self):
         _, sel, _, _ = self.tier("contained")

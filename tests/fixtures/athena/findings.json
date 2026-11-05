@@ -56,6 +56,25 @@
         },
         "cloudtrail": {
           "detects": "calls to non-global actions in other regions",
+          "match": {
+            "awsRegion": [
+              {
+                "anything-but": "${allowed_regions}"
+              }
+            ],
+            "eventSource": [
+              {
+                "anything-but": [
+                  "iam.amazonaws.com",
+                  "organizations.amazonaws.com",
+                  "sts.amazonaws.com",
+                  "route53.amazonaws.com",
+                  "cloudfront.amazonaws.com",
+                  "support.amazonaws.com"
+                ]
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -145,6 +164,19 @@
         },
         "cloudtrail": {
           "detects": "denied S3 calls to resources outside the organization",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "eventSource": [
+              "s3.amazonaws.com"
+            ]
+          },
+          "requires": [
+            "S3 data events on the organization trail"
+          ],
           "status": "planned"
         },
         "config": {
@@ -233,6 +265,25 @@
         },
         "cloudtrail": {
           "detects": "denied calls from principals outside the organization",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "eventSource": [
+              "s3.amazonaws.com",
+              "kms.amazonaws.com"
+            ],
+            "userIdentity": {
+              "type": [
+                "AWSAccount"
+              ]
+            }
+          },
+          "requires": [
+            "S3 data events on the organization trail"
+          ],
           "status": "planned"
         },
         "config": {
@@ -317,6 +368,34 @@
         },
         "cloudtrail": {
           "detects": "any of the guarded IAM calls on a break-glass or exception role",
+          "match": {
+            "eventName": [
+              "AttachRolePolicy",
+              "CreateRole",
+              "DeleteRole",
+              "DeleteRolePermissionsBoundary",
+              "DeleteRolePolicy",
+              "DetachRolePolicy",
+              "PutRolePermissionsBoundary",
+              "PutRolePolicy",
+              "TagRole",
+              "UntagRole",
+              "UpdateAssumeRolePolicy",
+              "UpdateRole",
+              "UpdateRoleDescription"
+            ],
+            "eventSource": [
+              "iam.amazonaws.com"
+            ],
+            "requestParameters": {
+              "roleName": [
+                "${protected_role_names}"
+              ]
+            }
+          },
+          "optional_parameters": [
+            "protected_role_names"
+          ],
           "status": "planned"
         },
         "config": {
@@ -332,7 +411,6 @@
         },
         "sentinel": {
           "checks": "forbid Terraform changes to break-glass and exception roles",
-          "level": "hard-mandatory",
           "status": "planned"
         },
         "vpce": {
@@ -392,6 +470,23 @@
         },
         "cloudtrail": {
           "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "errorMessage": [
+              {
+                "wildcard": "*explicit deny in a VPC endpoint policy*"
+              }
+            ],
+            "eventSource": [
+              {
+                "exists": true
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -408,7 +503,6 @@
         },
         "sentinel": {
           "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
-          "level": "hard-mandatory",
           "status": "planned"
         },
         "vpce": {
@@ -471,6 +565,23 @@
         },
         "cloudtrail": {
           "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "errorMessage": [
+              {
+                "wildcard": "*explicit deny in a VPC endpoint policy*"
+              }
+            ],
+            "eventSource": [
+              {
+                "exists": true
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -487,7 +598,6 @@
         },
         "sentinel": {
           "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
-          "level": "hard-mandatory",
           "status": "planned"
         },
         "vpce": {
@@ -548,6 +658,16 @@
         },
         "cloudtrail": {
           "detects": "denied athena calls from accounts not on the preview list",
+          "match": {
+            "eventSource": [
+              "athena.amazonaws.com"
+            ],
+            "recipientAccountId": [
+              {
+                "anything-but": "${preview_accounts}"
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -620,9 +740,29 @@
         },
         "cloudtrail": {
           "detects": "CreateDataCatalog, UpdateDataCatalog",
+          "match": {
+            "eventName": [
+              "CreateDataCatalog",
+              "UpdateDataCatalog"
+            ],
+            "eventSource": [
+              "athena.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {
+          "guard": {
+            "checks": [
+              {
+                "equals": "AwsDataCatalog",
+                "path": [
+                  "Name"
+                ]
+              }
+            ],
+            "resource_type": "AWS::Athena::DataCatalog"
+          },
           "rule": "custom: AWS::Athena::DataCatalog other than AwsDataCatalog",
           "status": "planned"
         },
@@ -635,7 +775,12 @@
         },
         "sentinel": {
           "checks": "forbid aws_athena_data_catalog",
-          "level": "hard-mandatory",
+          "plan": {
+            "forbid": true,
+            "resource_types": [
+              "aws_athena_data_catalog"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -693,6 +838,22 @@
         },
         "cloudtrail": {
           "detects": "the denied Spark and notebook actions",
+          "match": {
+            "eventName": [
+              "CreateNotebook",
+              "CreatePresignedNotebookUrl",
+              "ExportNotebook",
+              "GetSessionEndpoint",
+              "ImportNotebook",
+              "StartCalculationExecution",
+              "StartSession",
+              "UpdateNotebook",
+              "UpdateNotebookMetadata"
+            ],
+            "eventSource": [
+              "athena.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -708,7 +869,25 @@
         },
         "sentinel": {
           "checks": "forbid workgroups with a Spark engine",
-          "level": "hard-mandatory",
+          "plan": {
+            "checks": [
+              {
+                "not_in": [
+                  "PySpark engine version 3"
+                ],
+                "path": [
+                  "configuration",
+                  0,
+                  "engine_version",
+                  0,
+                  "selected_engine_version"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -773,6 +952,16 @@
         },
         "cloudtrail": {
           "detects": "athena calls without a vpcEndpointId",
+          "match": {
+            "eventSource": [
+              "athena.amazonaws.com"
+            ],
+            "vpcEndpointId": [
+              {
+                "exists": false
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -839,10 +1028,25 @@
         },
         "cloudtrail": {
           "detects": "trail changes",
+          "match": {
+            "eventName": [
+              "DeleteTrail",
+              "PutEventSelectors",
+              "PutInsightSelectors",
+              "StopLogging",
+              "UpdateTrail"
+            ],
+            "eventSource": [
+              "cloudtrail.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {
-          "rule": "cloudtrail-enabled / multi-region-cloudtrail-enabled (verify per run)",
+          "managed": {
+            "identifier": "MULTI_REGION_CLOUD_TRAIL_ENABLED"
+          },
+          "rule": "multi-region-cloudtrail-enabled (identifier MULTI_REGION_CLOUD_TRAIL_ENABLED)",
           "status": "planned"
         },
         "rcp": {
@@ -904,6 +1108,16 @@
         },
         "cloudtrail": {
           "detects": "recorder changes",
+          "match": {
+            "eventName": [
+              "DeleteConfigurationRecorder",
+              "DeleteDeliveryChannel",
+              "StopConfigurationRecorder"
+            ],
+            "eventSource": [
+              "config.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -969,6 +1183,12 @@
           "status": "not_applicable"
         },
         "config": {
+          "managed": {
+            "identifier": "ATHENA_WORKGROUP_ENFORCE_WORKGROUP_CONFIGURATION",
+            "resource_types": [
+              "AWS::Athena::WorkGroup"
+            ]
+          },
           "rule": "athena-workgroup-enforce-workgroup-configuration",
           "status": "planned"
         },
@@ -982,6 +1202,21 @@
         },
         "sentinel": {
           "checks": "aws_athena_workgroup.configuration.enforce_workgroup_configuration = true",
+          "plan": {
+            "checks": [
+              {
+                "equals": true,
+                "path": [
+                  "configuration",
+                  0,
+                  "enforce_workgroup_configuration"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1025,7 +1260,33 @@
           "status": "not_applicable"
         },
         "config": {
-          "rule": "athena-workgroup-encrypted-at-rest; customer-managed key needs a custom check",
+          "guard": {
+            "checks": [
+              {
+                "in": [
+                  "SSE_KMS",
+                  "CSE_KMS"
+                ],
+                "path": [
+                  "WorkGroupConfiguration",
+                  "ResultConfiguration",
+                  "EncryptionConfiguration",
+                  "EncryptionOption"
+                ]
+              },
+              {
+                "exists": true,
+                "path": [
+                  "WorkGroupConfiguration",
+                  "ResultConfiguration",
+                  "EncryptionConfiguration",
+                  "KmsKey"
+                ]
+              }
+            ],
+            "resource_type": "AWS::Athena::WorkGroup"
+          },
+          "rule": "custom Guard: SSE_KMS or CSE_KMS with a key (athena-workgroup-encrypted-at-rest doesn't check the key type)",
           "status": "planned"
         },
         "rcp": {
@@ -1038,6 +1299,40 @@
         },
         "sentinel": {
           "checks": "encryption_option in SSE_KMS, CSE_KMS with kms_key_arn set",
+          "plan": {
+            "checks": [
+              {
+                "in": [
+                  "SSE_KMS",
+                  "CSE_KMS"
+                ],
+                "path": [
+                  "configuration",
+                  0,
+                  "result_configuration",
+                  0,
+                  "encryption_configuration",
+                  0,
+                  "encryption_option"
+                ]
+              },
+              {
+                "exists": true,
+                "path": [
+                  "configuration",
+                  0,
+                  "result_configuration",
+                  0,
+                  "encryption_configuration",
+                  0,
+                  "kms_key_arn"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1116,6 +1411,12 @@
           "status": "not_applicable"
         },
         "config": {
+          "managed": {
+            "identifier": "ATHENA_WORKGROUP_LOGGING_ENABLED",
+            "resource_types": [
+              "AWS::Athena::WorkGroup"
+            ]
+          },
           "rule": "athena-workgroup-logging-enabled",
           "status": "planned"
         },
@@ -1129,6 +1430,21 @@
         },
         "sentinel": {
           "checks": "publish_cloudwatch_metrics_enabled = true",
+          "plan": {
+            "checks": [
+              {
+                "equals": true,
+                "path": [
+                  "configuration",
+                  0,
+                  "publish_cloudwatch_metrics_enabled"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1170,6 +1486,14 @@
         },
         "cloudtrail": {
           "detects": "config:PutConfigurationRecorder changes",
+          "match": {
+            "eventName": [
+              "PutConfigurationRecorder"
+            ],
+            "eventSource": [
+              "config.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -1229,6 +1553,19 @@
           "status": "not_applicable"
         },
         "config": {
+          "guard": {
+            "checks": [
+              {
+                "exists": true,
+                "path": [
+                  "WorkGroupConfiguration",
+                  "ResultConfiguration",
+                  "ExpectedBucketOwner"
+                ]
+              }
+            ],
+            "resource_type": "AWS::Athena::WorkGroup"
+          },
           "rule": "custom Guard: ResultConfiguration.ExpectedBucketOwner set",
           "status": "planned"
         },
@@ -1242,6 +1579,23 @@
         },
         "sentinel": {
           "checks": "result_configuration.expected_bucket_owner set",
+          "plan": {
+            "checks": [
+              {
+                "exists": true,
+                "path": [
+                  "configuration",
+                  0,
+                  "result_configuration",
+                  0,
+                  "expected_bucket_owner"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1283,6 +1637,44 @@
         },
         "cloudtrail": {
           "detects": "AccessDenied on athena:* with an SCP reason; any call by a BreakGlass role",
+          "match": {
+            "$or": [
+              {
+                "errorCode": [
+                  {
+                    "prefix": "AccessDenied"
+                  }
+                ],
+                "errorMessage": [
+                  {
+                    "wildcard": "*explicit deny in a service control policy*"
+                  }
+                ],
+                "eventSource": [
+                  "athena.amazonaws.com"
+                ]
+              },
+              {
+                "eventSource": [
+                  {
+                    "exists": true
+                  }
+                ],
+                "userIdentity": {
+                  "sessionContext": {
+                    "sessionIssuer": {
+                      "arn": [
+                        "${break_glass_principals}"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "optional_parameters": [
+            "break_glass_principals"
+          ],
           "status": "planned"
         },
         "config": {
@@ -1342,7 +1734,8 @@
           "status": "not_applicable"
         },
         "config": {
-          "rule": "tagged-athena-workgroup",
+          "rule": "Security Hub control Athena.3 (AWS-managed)",
+          "security_hub_control": "Athena.3",
           "status": "planned"
         },
         "rcp": {
@@ -1355,6 +1748,19 @@
         },
         "sentinel": {
           "checks": "tags present on aws_athena_workgroup",
+          "plan": {
+            "checks": [
+              {
+                "not_empty": true,
+                "path": [
+                  "tags"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1399,7 +1805,8 @@
           "status": "not_applicable"
         },
         "config": {
-          "rule": "tagged-athena-datacatalog",
+          "rule": "Security Hub control Athena.2 (AWS-managed)",
+          "security_hub_control": "Athena.2",
           "status": "planned"
         },
         "rcp": {
@@ -1412,6 +1819,19 @@
         },
         "sentinel": {
           "checks": "tags present on aws_athena_data_catalog",
+          "plan": {
+            "checks": [
+              {
+                "not_empty": true,
+                "path": [
+                  "tags"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_data_catalog"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1457,6 +1877,12 @@
           "status": "not_applicable"
         },
         "config": {
+          "managed": {
+            "identifier": "ATHENA_WORKGROUP_ENGINE_VERSION_AUTO_UPGRADE",
+            "resource_types": [
+              "AWS::Athena::WorkGroup"
+            ]
+          },
           "rule": "athena-workgroup-engine-version-auto-upgrade",
           "status": "planned"
         },
@@ -1470,6 +1896,23 @@
         },
         "sentinel": {
           "checks": "engine_version.selected_engine_version = AUTO",
+          "plan": {
+            "checks": [
+              {
+                "equals": "AUTO",
+                "path": [
+                  "configuration",
+                  0,
+                  "engine_version",
+                  0,
+                  "selected_engine_version"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1513,6 +1956,12 @@
           "status": "not_applicable"
         },
         "config": {
+          "managed": {
+            "identifier": "ATHENA_WORKGROUP_DESCRIPTION",
+            "resource_types": [
+              "AWS::Athena::WorkGroup"
+            ]
+          },
           "rule": "athena-workgroup-description",
           "status": "planned"
         },
@@ -1526,6 +1975,19 @@
         },
         "sentinel": {
           "checks": "description set",
+          "plan": {
+            "checks": [
+              {
+                "not_empty": true,
+                "path": [
+                  "description"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1562,6 +2024,18 @@
           "status": "not_applicable"
         },
         "config": {
+          "guard": {
+            "checks": [
+              {
+                "exists": true,
+                "path": [
+                  "WorkGroupConfiguration",
+                  "BytesScannedCutoffPerQuery"
+                ]
+              }
+            ],
+            "resource_type": "AWS::Athena::WorkGroup"
+          },
           "rule": "custom Guard: BytesScannedCutoffPerQuery set",
           "status": "planned"
         },
@@ -1575,6 +2049,21 @@
         },
         "sentinel": {
           "checks": "bytes_scanned_cutoff_per_query set",
+          "plan": {
+            "checks": [
+              {
+                "exists": true,
+                "path": [
+                  "configuration",
+                  0,
+                  "bytes_scanned_cutoff_per_query"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {
@@ -1619,10 +2108,34 @@
         },
         "cloudtrail": {
           "detects": "CreateWorkGroup without the tag",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "eventName": [
+              "CreateWorkGroup"
+            ],
+            "eventSource": [
+              "athena.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {
-          "rule": "required-tags (verify per run)",
+          "guard": {
+            "checks": [
+              {
+                "has_tag": "cost-center",
+                "path": [
+                  "Tags"
+                ]
+              }
+            ],
+            "resource_type": "AWS::Athena::WorkGroup"
+          },
+          "rule": "custom Guard: cost-center tag on the workgroup",
           "status": "planned"
         },
         "rcp": {
@@ -1634,6 +2147,19 @@
         },
         "sentinel": {
           "checks": "cost-center tag on aws_athena_workgroup",
+          "plan": {
+            "checks": [
+              {
+                "has_tag": "cost-center",
+                "path": [
+                  "tags"
+                ]
+              }
+            ],
+            "resource_types": [
+              "aws_athena_workgroup"
+            ]
+          },
           "status": "planned"
         },
         "vpce": {

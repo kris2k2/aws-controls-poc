@@ -159,8 +159,12 @@ def preview_candidate(code: str, name: str, prefixes: list[str]) -> dict:
                       "conditions": {"StringNotEquals": {"aws:PrincipalAccount": "${preview_accounts}"}}},
         "implementations": {
             "boundary": {"status": "not_applicable", "reason": "not a delegated-role control"},
+            # Any call outside the preview accounts, denied or not. The event source
+            # is assumed to be <prefix>.amazonaws.com; the analyst checks it (finding F3).
             "cloudtrail": {"status": "planned",
-                           "detects": f"denied {name} calls from accounts not on the preview list"},
+                           "detects": f"denied {name} calls from accounts not on the preview list",
+                           "match": {"eventSource": [f"{p}.amazonaws.com" for p in prefixes],
+                                     "recipientAccountId": [{"anything-but": "${preview_accounts}"}]}},
             "config": {"status": "not_applicable", "reason": "not configuration state"},
             "rcp": {"status": "not_applicable", "reason": "not a resource-side control"},
             "scp": {"status": "planned"},
@@ -251,7 +255,8 @@ def security_hub_candidates(catalog: ControlCatalog, key: str, code: str, index:
             continue
         severity = SEVERITIES[control["Severity"]]
         impls = {p: {"status": "not_applicable", "reason": r} for p, r in _NOT_APPLICABLE.items()}
-        impls["config"] = {"status": "planned", "rule": f"Security Hub control {ident} (AWS-managed)"}
+        impls["config"] = {"status": "planned", "rule": f"Security Hub control {ident} (AWS-managed)",
+                           "security_hub_control": ident}
         candidates.append({
             "control_id": f"{code}-SH-{int(m.group(2)):02d}",
             "title": name.strip(),

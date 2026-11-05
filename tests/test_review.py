@@ -107,7 +107,7 @@ class DecisionTest(RunCase):
         self.assertIn("break-glass:principals", open_)
         self.assertEqual(len(result["acceptance_template"]["acceptances"]), len(open_))
         # The numbers in docs/simulations/athena-journey.md, section 6.
-        self.assertEqual(result["counts"], {"needs acceptance": 22, "accepted": 0, "auto-accepted": 11})
+        self.assertEqual(result["counts"], {"needs acceptance": 22, "accepted": 0, "auto-accepted": 12})
 
     def test_without_the_api_contract_nothing_is_proved(self):
         request_path, run = self.build()
@@ -252,6 +252,23 @@ class BlockerTest(RunCase):
         (self.run / "org-policies" / "scp-extra.json").write_text(json.dumps({"Statement": []}))
         self.assertBlocked(self.review(self.request_path, self.run), "reproducible",
                            "org-policies/scp-extra.json")
+
+    def test_an_edited_or_extra_detective_artifact_is_blocked(self):
+        sentinel = self.run / "detective" / "sentinel" / "ath-c-02.sentinel"
+        sentinel.write_text(sentinel.read_text().replace("length(resources) is 0", "true"))
+        (self.run / "detective" / "eventbridge" / "ATH-X-01.json").write_text("{}")
+        (self.run / "detective" / "blob.bin").write_bytes(b"\xff\xfe")
+        result = self.review(self.request_path, self.run)
+        self.assertBlocked(result, "reproducible", "detective/blob.bin")
+        self.assertBlocked(result, "reproducible", "detective/sentinel/ath-c-02.sentinel")
+        self.assertBlocked(result, "reproducible", "detective/eventbridge/ATH-X-01.json")
+
+    def test_the_review_releases_the_artifacts_it_hashed_and_doubts_them(self):
+        result = self.review(self.request_path, self.run)
+        files = sorted(p.relative_to(self.run).as_posix() for p in (self.run / "detective").rglob("*") if p.is_file())
+        self.assertEqual(sorted(result["artifacts"]), files)
+        doubt = self.doubts(result)["unexercised-artifacts:detective"]
+        self.assertEqual((doubt["risk"], doubt["status"]), ("Low", "auto-accepted"))  # Moderate's ceiling is Low
 
     def test_a_missing_artifact_is_blocked(self):
         (self.run / "generation.json").unlink()

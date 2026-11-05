@@ -142,8 +142,16 @@ def cmd_generate(args) -> int:
     result = generate(findings, controls, request)
     for name, policy in result["policies"].items():
         _write_json(run / "org-policies" / f"{name}.json", policy)
+    # Review compares this directory with what Generate produces, so stale files must go.
+    if (run / "detective").is_dir():
+        shutil.rmtree(run / "detective")
+    for path, text in result["artifacts"].items():
+        (run / path).parent.mkdir(parents=True, exist_ok=True)
+        (run / path).write_text(text, encoding="utf-8")
     _write_json(run / "generation.json", result["report"])
-    print(f"Wrote {len(result['policies'])} organization policies to {run / 'org-policies'}")
+    pending = sum(s["status"] == "pending" for c in result["report"]["controls"].values() for s in c.values())
+    print(f"Wrote {len(result['policies'])} organization policies to {run / 'org-policies'} and "
+          f"{len(result['artifacts'])} detective artifacts to {run / 'detective'}; {pending} artifacts pending")
     return 0
 
 
@@ -245,7 +253,7 @@ class RunError(ValueError):
 # Files and directories the pipeline writes into a run, so a re-run starts clean.
 RUN_OUTPUTS = ("capability-profile.json", "findings.json", "assessment.json", "selection.json", "registry.json",
                "generation.json", "verification.json", "review.json", "run.json")
-RUN_OUTPUT_DIRS = ("controls", "org-policies", "delivery")
+RUN_OUTPUT_DIRS = ("controls", "org-policies", "detective", "delivery")
 
 
 def _clean_run(run: Path) -> None:

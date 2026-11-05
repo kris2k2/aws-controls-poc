@@ -36,8 +36,8 @@ from pathlib import Path
 
 from . import __version__, evaluator
 from .catalog import load_index
-from .controls import FindingsError, load_findings
-from .generate import ENDPOINT_BASE_ALLOW, MAX_POLICY_CHARS, GenerateError, generate, policy_size
+from .controls import GUARDRAIL_TYPES, FindingsError, load_findings
+from .generate import ENDPOINT_BASE_ALLOW, MAX_POLICY_CHARS, GenerateError, generate, policy_size, text_sha256
 from .model import Criticality, Mode, _Ordered
 from .request import OnboardingRequest
 from .select import SelectError, select
@@ -94,6 +94,10 @@ def load_run(run: Path) -> tuple[dict, list[str]]:
              for name in ("findings", "selection", "registry", "generation")}
     files["controls"] = {p.stem: _read(p, problems) for p in sorted((run / "controls").glob("*.json"))}
     files["policies"] = {p.stem: _read(p, problems) for p in sorted((run / "org-policies").glob("*.json"))}
+    # Detective and plan-time artifacts, compared as text: Sentinel files aren't JSON.
+    # Undecodable bytes are replaced, so a planted binary file is a difference, not a crash.
+    files["artifacts"] = {p.relative_to(run).as_posix(): p.read_bytes().decode("utf-8", errors="replace")
+                          for p in sorted((run / "detective").rglob("*")) if p.is_file()}
     if not files["policies"]:
         problems.append("org-policies/ holds no policies: run generate first")
     # Resolve's contract and Verify's report are optional: without the contract
@@ -159,6 +163,14 @@ def _reproduce(request: OnboardingRequest, run: dict, catalog: dict, out: _Findi
             elif want[name] != have[name]:
                 out.block("reproducible", f"{folder}/{name}.json",
                           "differs from what this request and findings produce")
+    want, have = generated["artifacts"], run.get("artifacts") or {}
+    for path in sorted(set(want) | set(have)):
+        if path not in have:
+            out.block("reproducible", path, "missing from the run")
+        elif path not in want:
+            out.block("reproducible", path, "not produced by this request and findings")
+        elif want[path] != have[path]:
+            out.block("reproducible", path, "differs from what this request and findings produce")
 
 
 def check_policies(policies: dict, generation: dict, controls: dict, out: _Findings) -> None:
@@ -343,16 +355,29 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
     for cid, statuses in sorted(generation.get("controls", {}).items()):
         if any(s["status"] == "pending" for s in statuses.values()):
             pending.append(cid)
-        if Mode(controls[cid]["mode"]).enforcing and not any(s["status"] == "generated" for s in statuses.values()):
+        # Config rules and detections only detect; Sentinel stops only what Terraform plans.
+        guarded = any(statuses.get(t, {}).get("status") == "generated" for t in GUARDRAIL_TYPES)
+        if Mode(controls[cid]["mode"]).enforcing and not guarded:
+            plan_time = statuses.get("sentinel", {}).get("status") == "generated"
             out.doubt("unenforced", cid, Risk.MEDIUM,
-                      f"{cid} is selected as {controls[cid]['mode']}, but this run deploys nothing for it",
-                      f"releasing without anything enforcing {cid} is acceptable for now",
+                      f"{cid} is selected as {controls[cid]['mode']}, but "
+                      + ("only a Sentinel policy enforces it, at plan time: resources made outside Terraform "
+                         "aren't stopped" if plan_time else "this run deploys nothing that enforces it"),
+                      f"releasing without a guardrail enforcing {cid} is acceptable for now",
                       {"mode": controls[cid]["mode"], "statuses": statuses})
     if pending:
         out.doubt("pending-artifacts", "detective", Risk.LOW,
                   f"{len(pending)} controls have artifacts not generated yet (Config, CloudTrail, Sentinel)",
                   "releasing the guardrails before their detective artifacts is acceptable",
                   {cid: generation["controls"][cid] for cid in pending})
+    artifacts = generation.get("detective_artifacts") or {}
+    if artifacts:
+        out.doubt("unexercised-artifacts", "detective", Risk.LOW,
+                  f"{len(artifacts)} Config rules, detections and Sentinel files are rendered but have not run "
+                  "in AWS Config, EventBridge or Sentinel: a wrong field path or event field misses what it "
+                  "should catch",
+                  "releasing detective artifacts checked only by the local evaluator is acceptable",
+                  artifacts)
 
 
 def _consistency(request: OnboardingRequest, run: dict, out: _Findings) -> None:
@@ -457,6 +482,8 @@ def review(request: OnboardingRequest, run: dict, *, evidence: dict | list[dict]
         # A deployment must release exactly these documents.
         "policy_set_sha256": sha256(policies),
         "policies": {name: sha256(doc) for name, doc in sorted(policies.items())},
+        # And exactly these detective artifacts (SHA-256 of each file's bytes).
+        "artifacts": {path: text_sha256(text) for path, text in sorted((run.get("artifacts") or {}).items())},
         "blockers": out.blockers,
         "doubts": sorted(out.doubts, key=lambda d: (-Risk(d["risk"]).rank, d["id"])),
         "counts": {s: sum(d["status"] == s for d in out.doubts)
