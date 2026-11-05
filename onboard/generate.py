@@ -1,7 +1,9 @@
 """Generate: render control records into artifacts.
 
-This slice renders the guardrail artifacts: SCP and RCP statements, plus the
-service's allow-list entry. A guardrail applies to every resource unless it
+This slice renders the guardrail artifacts: SCP, RCP and VPC endpoint policy
+statements, plus the service's allow-list entry. The endpoint policy goes on
+every VPC endpoint the organization runs: a base allow, so the endpoint stops
+only what its guardrails deny, then those denies. A guardrail applies to every resource unless it
 names `resources` (ARN patterns or ${parameters}). Config rules, CloudTrail
 detections, Sentinel policies and boundaries are reported as pending, not
 silently skipped.
@@ -26,6 +28,8 @@ from .model import Mode
 from .request import OnboardingRequest
 
 SCHEMA = "generation/v1"
+ENDPOINT_BASE_ALLOW = {"Sid": "AllowUnlessDenied", "Effect": "Allow", "Principal": "*", "Action": ["*"],
+                       "Resource": "*"}
 MAX_POLICY_CHARS = 5120  # SCP and RCP size limit, counted without whitespace
 _PARAMETER = re.compile(r"^\$\{([a-z_]+)\}$")
 
@@ -41,6 +45,7 @@ def parameters(request: OnboardingRequest, service: str) -> dict[str, list[str]]
         "preview_accounts": list(request.preview_accounts),
         "allowed_regions": list(request.allowed_regions),
         "break_glass_principals": list(request.break_glass_principals),
+        "trusted_resource_accounts": list(request.trusted_resource_accounts),
         # Every role some guardrail exempts. Exemptions hold only while nobody
         # else can create, change or pass these roles (ORG-C-04).
         "protected_roles": sorted(set(request.break_glass_principals)
@@ -101,11 +106,20 @@ def statement(record: dict, request: OnboardingRequest, params: dict) -> tuple[d
             return None, f"{m.group(1)} is empty, so the guardrail applies to no resources"
     resources = _resolve(resources, params, cid)
 
-    conditions = {op: {k: _resolve(v, params, cid) for k, v in keys.items()}
+    # A condition on an optional parameter the request leaves empty is dropped:
+    # an empty exception list means no exception, not a broken guardrail.
+    optional = set(guardrail.get("optional_parameters", []))
+
+    def empty_optional(value) -> bool:
+        m = _PARAMETER.match(value) if isinstance(value, str) else None
+        return bool(m) and m.group(1) in optional and not params.get(m.group(1))
+
+    conditions = {op: {k: _resolve(v, params, cid) for k, v in keys.items() if not empty_optional(v)}
                   for op, keys in copy.deepcopy(guardrail.get("conditions", {})).items()}
+    conditions = {op: keys for op, keys in conditions.items() if keys}
     _exempt(conditions, exempt)
     stmt = {"Sid": cid.replace("-", ""), "Effect": "Deny"}
-    if guardrail["type"] == "rcp":
+    if guardrail["type"] in ("rcp", "vpce"):
         stmt["Principal"] = "*"
     if "actions" in guardrail:
         stmt["Action"] = guardrail["actions"]
@@ -157,7 +171,10 @@ def generate(findings: dict, controls: dict[str, dict], request: OnboardingReque
     for (gtype, shared), stmts in sorted(statements.items()):
         if stmts:
             name = f"{gtype}-{'org' if shared else service}-guardrails"
+            if gtype == "vpce":  # endpoint policies replace the default full access, so allow first
+                stmts = [ENDPOINT_BASE_ALLOW] + stmts
             policies[name] = {"Version": "2012-10-17", "Statement": stmts}
+    endpoints = sorted({e for ids in (request.org_state.get("vpc_endpoints") or {}).values() for e in ids})
 
     report = {
         "schema": SCHEMA,
@@ -166,6 +183,8 @@ def generate(findings: dict, controls: dict[str, dict], request: OnboardingReque
         "maturity_tier": request.maturity_tier.value,
         "criticality": request.criticality.value,
         "allow_list_prefixes": prefixes,
+        # Attach every vpce-* policy to each of these (and to endpoints created later).
+        "vpc_endpoints": endpoints,
         "policies": {name: {"characters": policy_size(doc), "limit": MAX_POLICY_CHARS,
                             "over_limit": policy_size(doc) > MAX_POLICY_CHARS}
                      for name, doc in policies.items()},

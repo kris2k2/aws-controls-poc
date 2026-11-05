@@ -72,6 +72,10 @@
         "sentinel": {
           "checks": "provider region and aliases",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "region-containment",
@@ -125,9 +129,13 @@
             "aws:PrincipalIsAWSService": "false"
           },
           "StringNotEqualsIfExists": {
+            "aws:ResourceAccount": "${trusted_resource_accounts}",
             "aws:ResourceOrgID": "${org_id}"
           }
         },
+        "optional_parameters": [
+          "trusted_resource_accounts"
+        ],
         "type": "scp"
       },
       "implementations": {
@@ -153,6 +161,10 @@
         "sentinel": {
           "reason": "the bucket owner of a query target isn't in the plan",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "the network-path counterpart is ORG-C-06, which binds every caller through the endpoints",
+          "status": "not_applicable"
         }
       },
       "notes": "Athena query results, UNLOAD and CTAS write to S3 with the caller's permissions, so the S3 resource perimeter contains them. Break-glass is not exempt: the data perimeter holds for every principal, so a break-glass session can't move data out of the organization.",
@@ -160,7 +172,7 @@
       "severity": "High",
       "severity_source": "rubric",
       "shared": true,
-      "title": "Organization principals reach only organization S3 resources"
+      "title": "Organization principals reach only organization S3 resources and named trusted accounts"
     },
     {
       "blind_spots": [
@@ -237,6 +249,10 @@
         "sentinel": {
           "reason": "not visible in a Terraform plan",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "notes": "Athena itself isn't RCP-supported; its data perimeter is the S3 and KMS resources it reads and writes. Break-glass is not exempt: the data perimeter holds for every principal, so a break-glass session can't move data out of the organization.",
@@ -318,6 +334,10 @@
           "checks": "forbid Terraform changes to break-glass and exception roles",
           "level": "hard-mandatory",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "notes": "Every guardrail exempts break-glass principals, and Enforce-with-override guardrails exempt approved exceptions. The exemption matches on the role ARN, so it is only as strong as the protection of those roles: without this control, anyone allowed to create roles could create one with a break-glass name and skip every guardrail. IAM actions checked against the AWS service reference on 2026-11-05: each has the role as its resource.",
@@ -326,6 +346,160 @@
       "severity_source": "rubric",
       "shared": true,
       "title": "Only break-glass principals change or pass break-glass and exception roles"
+    },
+    {
+      "blind_spots": [
+        "traffic that bypasses the organization's endpoints (AR-05)",
+        "services whose endpoints don't support endpoint policies or these condition keys (verify per service)"
+      ],
+      "citations": [],
+      "class": "Containment",
+      "control_id": "ORG-C-05",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "sc-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "*"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "StringNotEqualsIfExists": {
+            "aws:PrincipalOrgID": "${org_id}"
+          }
+        },
+        "type": "vpce"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "not a permissions boundary control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom rule: every VPC endpoint carries the baseline endpoint policy (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "RCPs don't see requests to resources outside the organization",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "SCPs don't bind principals outside the organization",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
+          "level": "hard-mandatory",
+          "status": "planned"
+        },
+        "vpce": {
+          "status": "planned"
+        }
+      },
+      "notes": "SCPs bind only organization principals, so credentials from an outside account, or an unsigned request, could use the organization's endpoints to reach outside resources. The endpoint policy binds every caller. aws:PrincipalOrgID is absent for unsigned requests and standalone accounts, which the negated operator denies.",
+      "objective": "data-perimeter",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Only organization principals use the organization's VPC endpoints"
+    },
+    {
+      "blind_spots": [
+        "traffic that bypasses the organization's endpoints (AR-05)",
+        "services whose endpoints don't support endpoint policies or these condition keys (verify per service)"
+      ],
+      "citations": [],
+      "class": "Containment",
+      "control_id": "ORG-C-06",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "sc-7.10",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "*"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "StringNotEqualsIfExists": {
+            "aws:ResourceAccount": "${trusted_resource_accounts}",
+            "aws:ResourceOrgID": "${org_id}"
+          }
+        },
+        "optional_parameters": [
+          "trusted_resource_accounts"
+        ],
+        "type": "vpce"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "not a permissions boundary control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom rule: every VPC endpoint carries the baseline endpoint policy (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "RCPs don't see requests to resources outside the organization",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "ORG-C-02 covers S3 for organization principals; the endpoint covers every caller and every service",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
+          "level": "hard-mandatory",
+          "status": "planned"
+        },
+        "vpce": {
+          "status": "planned"
+        }
+      },
+      "notes": "Fails closed: a resource in a standalone account has no aws:ResourceOrgID, and a call with no resource has neither key, so both are denied through the endpoint unless the account is named in trusted_resource_accounts. AWS-owned resources (package repositories, image layers) need their accounts named or that traffic breaks.",
+      "objective": "data-perimeter",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "The organization's VPC endpoints reach only organization resources and named trusted accounts"
     },
     {
       "citations": [
@@ -390,6 +564,10 @@
         "sentinel": {
           "reason": "the plan doesn't reliably carry the target account",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "preview-accounts",
@@ -459,6 +637,10 @@
           "checks": "forbid aws_athena_data_catalog",
           "level": "hard-mandatory",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "notes": "No condition key tells catalog types apart, so the whole action is denied (finding F1).",
@@ -528,6 +710,10 @@
           "checks": "forbid workgroups with a Spark engine",
           "level": "hard-mandatory",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "notes": "Deny list from tests/fixtures/athena/action-review.json, which classifies every Spark action in the contract; reads and clean-up stay allowed.",
@@ -603,6 +789,10 @@
         "sentinel": {
           "reason": "not visible in a Terraform plan",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "binds organization principals to the endpoint; the endpoint's own policy is organization-wide (ORG-C-05, ORG-C-06)",
+          "status": "not_applicable"
         }
       },
       "notes": "Blocks the console from outside the VPC; that is the trade-off the network_perimeter decision accepts.",
@@ -665,6 +855,10 @@
         "sentinel": {
           "reason": "not visible in a Terraform plan",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "logging-tamper",
@@ -726,6 +920,10 @@
         "sentinel": {
           "reason": "not visible in a Terraform plan",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "detection-tamper",
@@ -785,6 +983,10 @@
         "sentinel": {
           "checks": "aws_athena_workgroup.configuration.enforce_workgroup_configuration = true",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "enforced-configuration",
@@ -837,6 +1039,10 @@
         "sentinel": {
           "checks": "encryption_option in SSE_KMS, CSE_KMS with kms_key_arn set",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "encryption",
@@ -924,6 +1130,10 @@
         "sentinel": {
           "checks": "publish_cloudwatch_metrics_enabled = true",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "logging",
@@ -977,6 +1187,10 @@
         "sentinel": {
           "reason": "not visible in a Terraform plan",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "config-recording",
@@ -1029,6 +1243,10 @@
         "sentinel": {
           "checks": "result_configuration.expected_bucket_owner set",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "results-location",
@@ -1082,6 +1300,10 @@
         "sentinel": {
           "reason": "not visible in a Terraform plan",
           "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "guardrail-detection",
@@ -1134,6 +1356,10 @@
         "sentinel": {
           "checks": "tags present on aws_athena_workgroup",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "inventory",
@@ -1187,6 +1413,10 @@
         "sentinel": {
           "checks": "tags present on aws_athena_data_catalog",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "notes": "Only AwsDataCatalog exists while ATH-C-02 holds.",
@@ -1241,6 +1471,10 @@
         "sentinel": {
           "checks": "engine_version.selected_engine_version = AUTO",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "hygiene",
@@ -1293,6 +1527,10 @@
         "sentinel": {
           "checks": "description set",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "inventory",
@@ -1338,6 +1576,10 @@
         "sentinel": {
           "checks": "bytes_scanned_cutoff_per_query set",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "resource-limits",
@@ -1393,6 +1635,10 @@
         "sentinel": {
           "checks": "cost-center tag on aws_athena_workgroup",
           "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
         }
       },
       "objective": "attribution",

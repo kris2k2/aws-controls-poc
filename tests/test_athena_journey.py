@@ -131,8 +131,10 @@ class Vectors:
         ("ORG-C-02", "exemption", req("s3:PutObject", role="break-glass", **{"aws:ResourceOrgID": OTHER_ORG}),
          False, "ORGC02"),
         ("ORG-C-03", "positive", req("s3:GetObject", **{"aws:ResourceOrgID": ORG}), True, None),
-        ("ORG-C-03", "positive", req("kms:Decrypt", **{"aws:ResourceOrgID": ORG, "aws:PrincipalOrgID": OTHER_ORG,
-                                                        "aws:PrincipalIsAWSService": "true"}), True, None),
+        # An AWS service principal: it doesn't come through the organization's endpoints.
+        ("ORG-C-03", "positive", req("kms:Decrypt", vpce=None, **{"aws:ResourceOrgID": ORG,
+                                                                  "aws:PrincipalOrgID": OTHER_ORG,
+                                                                  "aws:PrincipalIsAWSService": "true"}), True, None),
         ("ORG-C-03", "negative", req("s3:GetObject", **{"aws:ResourceOrgID": ORG, "aws:PrincipalOrgID": OTHER_ORG}),
          False, "ORGC03"),
         ("ORG-C-03", "exemption", req("kms:Decrypt", role="break-glass",
