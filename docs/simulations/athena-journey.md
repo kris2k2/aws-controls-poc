@@ -10,7 +10,7 @@ the spec's `report.md` layout where they apply.
 | Requests | `tests/fixtures/athena/request-{private-preview,contained,hardened}.json` (synthetic org `o-exampleorgid`, preview account `111122223333`, data classification Internal Restricted, criticality Moderate) |
 | Candidate controls | `tests/fixtures/athena/findings.json`: 24 candidates, hand-written in place of Assess |
 | API contract | AWS service reference snapshot, `tests/fixtures/service-reference/2026-10-30/` |
-| Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_adversarial.py` (guardrails against an attacker, see [section 5](#5-adversarial-verification)), `tests/test_athena_acceptance.py` (Resolve) |
+| Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_adversarial.py` (guardrails against an attacker, see [section 5](#5-adversarial-verification)), `tests/test_review.py` (release review, [section 6](#6-release-review)), `tests/test_athena_acceptance.py` (Resolve) |
 | Run it | see [Reproduce](#reproduce) |
 
 **How to read this.** Tier outcomes, modes and guardrail behaviour are tool
@@ -231,7 +231,35 @@ name outside the organization through the RCP, any member allowed to create
 roles could give itself that name and skip every guardrail, and ATH-C-03
 missed `UpdateNotebook` and `UpdateNotebookMetadata`.
 
-## 6. Findings for the spec and the tool
+## 6. Release review
+
+`onboard review` decides whether a run may be released without a person
+([ADR-0005](../adr/0005-risk-based-release-review.md)), tested by
+`tests/test_review.py`. It re-runs Select and Generate and blocks on any
+difference, checks the policies themselves, then lists its doubts, each with
+a risk and the question a person answers by accepting it.
+
+At Private Preview, with no evidence supplied, the run **holds**:
+
+| Doubts | Risk | Status at Moderate (ceiling Low) |
+|---|---|---|
+| No proof, and no impact replay, for each of the 6 organization-wide denies | High | needs a person (12) |
+| No proof for each of Athena's 4 denies (no impact replay needed: nobody uses Athena yet) | Medium | needs a person (4) |
+| Inferred High or Critical severity (9 controls), evaluator not calibrated, break-glass trust policies unchecked | Medium | needs a person (11) |
+| Enforce on inferred mappings only (10 controls), detective artifacts pending | Low | accepted by the reviewer (11) |
+
+With proof, impact and calibration evidence for every statement (synthetic
+in the tests, since no stage produces it yet), what is left is judgement:
+the severities and break-glass. Once a person other than the maker accepts
+those, the run **releases**. The next run releases on its own while nothing
+changes; opening a region brings back only the two doubts about ORG-C-01's
+changed statement. The promotion to Contained adds doubts for the lifted
+preview restriction (ATH-C-01 retired), the trusted resource account, the
+supervision controls nothing enforces yet (F11), and impact replays for
+Athena's own denies. Any edited file, failed proof or unexpected Allow
+**blocks**, and no acceptance overrides a blocker.
+
+## 7. Findings for the spec and the tool
 
 | # | Finding | Status | Proposed change |
 |---|---|---|---|
@@ -251,7 +279,7 @@ missed `UpdateNotebook` and `UpdateNotebookMetadata`.
 | F14 | **Break-glass could move data out of the organization**: it was exempt from the S3 resource perimeter (ORG-C-02). Its reach is set by trust policies the tool doesn't check. | Fixed, pending sign-off | Guardrails can set `break_glass_exempt: false`; the data perimeter (ORG-C-02, ORG-C-03) does. Checking break-glass trust policies is open. |
 | F15 | **The organization's VPC endpoints let data leave with someone else's credentials.** No SCP or RCP applies to an outside principal writing to an outside resource, and the endpoints carried AWS's default full-access policy. | Fixed for traffic through the endpoints | A baseline endpoint policy (ORG-C-05, ORG-C-06) on every endpoint; named exceptions in `trusted_resource_accounts`. Traffic around the endpoints is AR-05: a network control. |
 
-## 7. Not done yet
+## 8. Not done yet
 
 - **Detective and plan-time artifacts:** Config rules, CloudTrail detections
   and Sentinel policies are declared per control but show as `pending`.
@@ -260,6 +288,9 @@ missed `UpdateNotebook` and `UpdateNotebookMetadata`.
   root and Athena's at the account.
 - **Assess:** the candidates are hand-written. The Control Catalog and
   Security Hub lookups and the verification pass are not built.
+- **Unattended release:** the review is built, but no stage produces proof,
+  impact or calibration evidence yet, acceptances aren't authenticated, and no
+  pipeline deploys on `release` (ADR-0005).
 - **Validate:** gates are asserted in tests, but `validation.json`,
   `report.md`, approvals and the manifest aren't produced.
 - **Level 2 end-state tests:** no disposable test account yet.
