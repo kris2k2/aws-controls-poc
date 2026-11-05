@@ -303,6 +303,10 @@ Athena's own denies. Any edited file, failed proof or unexpected Allow
   byte-identical policies as the hand-written candidates
   (`tests/test_assess.py`). Not yet run against AWS; the verification pass
   for inferred mappings is not built.
+- **Whole cycle and delivery:** `onboard run` takes Athena from the request
+  to a sealed bundle ([ADR-0008](../adr/0008-run-and-sealed-delivery.md)):
+  it holds on 22 doubts at Private Preview and delivers once the checker
+  accepts them (`tests/test_run.py`).
 - **Unattended release:** the review and Verify are built, but no stage
   produces impact or calibration evidence yet, the spec and accepted risks
   aren't signed off, acceptances aren't authenticated, and no pipeline deploys

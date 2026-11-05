@@ -22,6 +22,7 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 | 4. Generate | Partial: SCP and RCP guardrails, the allow-list, and the baseline VPC endpoint policy ([ADR-0004](docs/adr/0004-baseline-vpc-endpoint-policy.md)); Config, CloudTrail and Sentinel are reported as pending |
 | Verify | Done for Athena: each generated deny proved against its security property over the attacker model, with mutation testing; writes `verification.json` ([ADR-0006](docs/adr/0006-verify-stage.md)). A new service needs its own spec in `onboard/specs/` |
 | Review | Partial: a deterministic release decision (release, hold or blocked) from a reproduction check, its own run of Verify, checks on the policies, statement-bound impact and calibration evidence, and fingerprinted human acceptances ([ADR-0005](docs/adr/0005-risk-based-release-review.md)). No stage produces impact or calibration evidence yet, so runs hold |
+| Run · Deliver | Done: `onboard run` takes a request through every stage; on release, Deliver re-runs Review and writes a sealed bundle (the reviewed policies, their evidence and a hashed manifest) that `onboard check-delivery` checks ([ADR-0008](docs/adr/0008-run-and-sealed-delivery.md)). Deploys nothing |
 | 5. Compose · 6. Validate | Not started; a local SCP/RCP evaluator backs the Level 1 guardrail tests, including the adversarial suite: a bounded proof of each guardrail against a reviewed security spec, plus mutation testing ([ADR-0003](docs/adr/0003-adversarial-verification-of-guardrails.md)) |
 
 Initial test case: [Athena from Private Preview to Hardened](docs/simulations/athena-journey.md).
@@ -29,6 +30,17 @@ Initial test case: [Athena from Private Preview to Hardened](docs/simulations/at
 ## Usage
 
 Requires Python 3.13 or later. There are no third-party dependencies.
+
+The whole cycle, from a service to a delivery bundle:
+
+```sh
+python3 -m onboard run request.json --out runs/bedrock --overlay overlay.json  # exit 0 delivered, 3 hold, 4 blocked
+# On hold: a checker (not the maker) fills in acceptance_template from runs/bedrock/review.json, then
+python3 -m onboard run request.json --out runs/bedrock --overlay overlay.json --acceptances acceptances.json
+python3 -m onboard check-delivery runs/bedrock/delivery  # what a deployment pipeline runs first
+```
+
+Or stage by stage:
 
 ```sh
 python3 -m onboard check-request request.json
@@ -40,6 +52,7 @@ python3 -m onboard select request.json --findings runs/bedrock/findings.json --o
 python3 -m onboard generate request.json --run runs/bedrock
 python3 -m onboard verify request.json --run runs/bedrock  # needs the service's spec in onboard/specs/ (Athena so far) and resolve's output in the run; exit 0 pass, 4 fail
 python3 -m onboard review request.json --run runs/bedrock --acceptances acceptances.json  # exit 0 release, 3 hold, 4 blocked
+python3 -m onboard deliver request.json --run runs/bedrock --acceptances acceptances.json  # reviews again; on release writes runs/bedrock/delivery
 python3 -m onboard catalog --out catalogs/nist-sp-800-53-rev5.json  # refresh the pinned NIST catalog index
 ```
 
