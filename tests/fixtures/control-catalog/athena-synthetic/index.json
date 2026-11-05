@@ -1,0 +1,110 @@
+{
+  "note": "SYNTHETIC: written for the tests in the response shape of AWS's API reference, not recorded from AWS. ARNs, the S3 and Athena.98/.99 entries and every framework mapping (including the framework name NIST-SP-800-53-r5) are made up. The names and severities of Athena.2, .3 and .4 follow the Security Hub page cited in tests/fixtures/athena/findings.json (checked 2026-10-30). Replace with a recorded snapshot (onboard assess --record-snapshot) once a run has read-only access.",
+  "region": "ca-central-1",
+  "responses": [
+    {
+      "body": {
+        "Filter": {
+          "Implementations": {
+            "Types": [
+              "AWS::SecurityHub::SecurityControl"
+            ]
+          }
+        }
+      },
+      "file": "0001-ListControls.json",
+      "operation": "ListControls",
+      "query": {
+        "maxResults": "100"
+      }
+    },
+    {
+      "body": {
+        "Filter": {
+          "Implementations": {
+            "Types": [
+              "AWS::SecurityHub::SecurityControl"
+            ]
+          }
+        }
+      },
+      "file": "0002-ListControls.json",
+      "operation": "ListControls",
+      "query": {
+        "maxResults": "100",
+        "nextToken": "synthetic-page-2"
+      }
+    },
+    {
+      "body": {
+        "Filter": {
+          "ControlArns": [
+            "arn:aws:controlcatalog:::control/syntheticathena4"
+          ],
+          "MappingTypes": [
+            "FRAMEWORK"
+          ]
+        }
+      },
+      "file": "mappings-athena4.json",
+      "operation": "ListControlMappings",
+      "query": {
+        "maxResults": "1000"
+      }
+    },
+    {
+      "body": {
+        "Filter": {
+          "ControlArns": [
+            "arn:aws:controlcatalog:::control/syntheticathena2"
+          ],
+          "MappingTypes": [
+            "FRAMEWORK"
+          ]
+        }
+      },
+      "file": "mappings-athena2.json",
+      "operation": "ListControlMappings",
+      "query": {
+        "maxResults": "1000"
+      }
+    },
+    {
+      "body": {
+        "Filter": {
+          "ControlArns": [
+            "arn:aws:controlcatalog:::control/syntheticathena3"
+          ],
+          "MappingTypes": [
+            "FRAMEWORK"
+          ]
+        }
+      },
+      "file": "mappings-athena3.json",
+      "operation": "ListControlMappings",
+      "query": {
+        "maxResults": "1000"
+      }
+    },
+    {
+      "body": {
+        "Filter": {
+          "ControlArns": [
+            "arn:aws:controlcatalog:::control/syntheticathena99"
+          ],
+          "MappingTypes": [
+            "FRAMEWORK"
+          ]
+        }
+      },
+      "file": "mappings-athena99.json",
+      "operation": "ListControlMappings",
+      "query": {
+        "maxResults": "1000"
+      }
+    }
+  ],
+  "retrieved": "2026-11-05T00:00:00Z",
+  "schema": "control-catalog-snapshot/v1",
+  "synthetic": true
+}

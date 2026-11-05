@@ -14,3 +14,7 @@
 /onboard/evaluator.py                        @kris2k2
 /onboard/verify.py                           @kris2k2
 /onboard/review.py                           @kris2k2
+# The shared organization baseline every service reuses, and the only
+# credentialed client (ADR-0007).
+/onboard/baseline/                           @kris2k2
+/onboard/control_catalog.py                  @kris2k2

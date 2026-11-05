@@ -1,0 +1,14 @@
+{
+  "ControlMappings": [
+    {
+      "ControlArn": "arn:aws:controlcatalog:::control/syntheticathena99",
+      "Mapping": {
+        "Framework": {
+          "Item": "SC-7",
+          "Name": "FedRAMP-r4"
+        }
+      },
+      "MappingType": "FRAMEWORK"
+    }
+  ]
+}

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import sys
 import urllib.parse
 from pathlib import Path
 
+from .assess import AssessError, assess
 from .catalog import CATALOG_URL, PINNED_INDEX, CatalogError, build_index, fetch_index, load_index
+from .control_catalog import (REGION as CATALOG_REGION, ControlCatalog, http_transport, recording_transport,
+                              snapshot_metadata, snapshot_transport)
 from .controls import FindingsError, load_findings
 from .generate import GenerateError, generate
 from .request import RequestError, parse_request
@@ -74,6 +78,36 @@ def _read_json(path: Path):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise FindingsError([f"cannot read {path}: {exc}"]) from exc
+
+
+def cmd_assess(args) -> int:
+    request = _load_request(args.request)
+    run = Path(args.run)
+    profile_path = run / "capability-profile.json"
+    if not profile_path.exists():
+        raise AssessError(f"{profile_path} is missing: run resolve into the run first")
+    profile = _read_json(profile_path)
+    if args.control_catalog_snapshot:
+        directory = Path(args.control_catalog_snapshot)
+        transport = snapshot_transport(directory)
+        source = {"mode": "snapshot", "snapshot": directory.name, **snapshot_metadata(directory)}
+    else:
+        transport = http_transport()
+        source = {"mode": "live", "region": CATALOG_REGION, "synthetic": False,
+                  "retrieved": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        if args.record_snapshot:
+            transport = recording_transport(transport, Path(args.record_snapshot))
+    overlay = _read_json(Path(args.overlay)) if args.overlay else None
+    result = assess(request, profile, ControlCatalog(transport), load_index(Path(args.catalog)),
+                    overlay=overlay, source=source)
+    _write_json(run / "findings.json", result["findings"])
+    _write_json(run / "assessment.json", result["assessment"])
+    a = result["assessment"]
+    counts = ", ".join(f"{k}: {v}" for k, v in a["counts"].items())
+    skipped = len(a["sources"]["control_catalog"]["skipped"])
+    print(f"Wrote {run / 'findings.json'} ({len(a['candidates'])} candidates; {counts}); "
+          f"{skipped} Security Hub controls skipped, see {run / 'assessment.json'}")
+    return 0
 
 
 def cmd_select(args) -> int:
@@ -190,9 +224,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--snapshot", help="read the service reference from this directory instead of AWS")
     p.set_defaults(func=cmd_resolve)
 
+    p = sub.add_parser("assess", help="Assess stage: write findings.json and assessment.json from the capability "
+                                      "profile, the organization baseline and the AWS Control Catalog")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--run", required=True, help="run directory written by resolve")
+    p.add_argument("--overlay", help="the analyst's candidates and dependencies (findings-overlay/v1)")
+    source = p.add_mutually_exclusive_group()
+    source.add_argument("--control-catalog-snapshot",
+                        help="replay the Control Catalog from this snapshot directory (offline; no credentials)")
+    source.add_argument("--record-snapshot", help="also save the live Control Catalog responses to this directory")
+    p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
+    p.set_defaults(func=cmd_assess)
+
     p = sub.add_parser("select", help="Select stage: write control records and selection.json")
     p.add_argument("request", help="request JSON file")
-    p.add_argument("--findings", required=True, help="findings.json from Assess")
+    p.add_argument("--findings", required=True, help="findings.json from Assess (in the run directory)")
     p.add_argument("--out", required=True, help="run output directory")
     p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
     p.set_defaults(func=cmd_select)
@@ -230,6 +276,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError,
-            CatalogError, VerifyError) as exc:
+            CatalogError, VerifyError, AssessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

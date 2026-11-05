@@ -1,0 +1,56 @@
+{
+  "Controls": [
+    {
+      "Aliases": [
+        "SH.Athena.3"
+      ],
+      "Arn": "arn:aws:controlcatalog:::control/syntheticathena3",
+      "Behavior": "DETECTIVE",
+      "CreateTime": 1700000000,
+      "Description": "Synthetic test entry for Athena.3.",
+      "GovernedResources": [
+        "AWS::Athena::WorkGroup"
+      ],
+      "Implementation": {
+        "Identifier": "Athena.3",
+        "Type": "AWS::SecurityHub::SecurityControl"
+      },
+      "Name": "Athena workgroups should be tagged",
+      "Severity": "LOW"
+    },
+    {
+      "Aliases": [
+        "SH.Athena.99"
+      ],
+      "Arn": "arn:aws:controlcatalog:::control/syntheticathena99",
+      "Behavior": "DETECTIVE",
+      "CreateTime": 1700000000,
+      "Description": "Synthetic test entry for Athena.99.",
+      "GovernedResources": [],
+      "Implementation": {
+        "Identifier": "Athena.99",
+        "Type": "AWS::SecurityHub::SecurityControl"
+      },
+      "Name": "Synthetic Athena control with no NIST mapping (test only)",
+      "Severity": "HIGH"
+    },
+    {
+      "Aliases": [
+        "SH.Athena.98"
+      ],
+      "Arn": "arn:aws:controlcatalog:::control/syntheticathena98",
+      "Behavior": "PROACTIVE",
+      "CreateTime": 1700000000,
+      "Description": "Synthetic test entry for Athena.98.",
+      "GovernedResources": [
+        "AWS::Athena::WorkGroup"
+      ],
+      "Implementation": {
+        "Identifier": "Athena.98",
+        "Type": "AWS::SecurityHub::SecurityControl"
+      },
+      "Name": "Synthetic proactive Athena control (test only)",
+      "Severity": "LOW"
+    }
+  ]
+}

@@ -8,9 +8,9 @@ the spec's `report.md` layout where they apply.
 |---|---|
 | Date | 2026-10-30 |
 | Requests | `tests/fixtures/athena/request-{private-preview,contained,hardened}.json` (synthetic org `o-exampleorgid`, preview account `111122223333`, data classification Internal Restricted, criticality Moderate) |
-| Candidate controls | `tests/fixtures/athena/findings.json`: 24 candidates, hand-written in place of Assess |
+| Candidate controls | `tests/fixtures/athena/findings.json`: 24 candidates, hand-written; Assess reproduces them from `overlay.json` (12) plus the baseline, the preview restriction and 3 Security Hub controls |
 | API contract | AWS service reference snapshot, `tests/fixtures/service-reference/2026-10-30/` |
-| Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_adversarial.py` (guardrails against an attacker, see [section 5](#5-adversarial-verification)), `tests/test_verify.py` (the Verify stage), `tests/test_review.py` (release review, [section 6](#6-release-review)), `tests/test_athena_acceptance.py` (Resolve) |
+| Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_adversarial.py` (guardrails against an attacker, see [section 5](#5-adversarial-verification)), `tests/test_verify.py` (the Verify stage), `tests/test_review.py` (release review, [section 6](#6-release-review)), `tests/test_athena_acceptance.py` (Resolve), `tests/test_assess.py` (Assess, the same journey from assessed findings) |
 | Run it | see [Reproduce](#reproduce) |
 
 **How to read this.** Tier outcomes, modes and guardrail behaviour are tool
@@ -296,8 +296,13 @@ Athena's own denies. Any edited file, failed proof or unexpected Allow
 - **Compose:** placement per OU level, budgets across all services, and the
   diff against `org_state`. The tests place organization policies at the
   root and Athena's at the account.
-- **Assess:** the candidates are hand-written. The Control Catalog and
-  Security Hub lookups and the verification pass are not built.
+- **Assess:** built for the baseline, the preview restriction and Security
+  Hub controls from the Control Catalog ([ADR-0007](../adr/0007-assess-from-the-control-catalog.md)).
+  From assessed findings (`tests/fixtures/athena/overlay.json` and a
+  synthetic catalog snapshot) the three tiers give the same outcomes and
+  byte-identical policies as the hand-written candidates
+  (`tests/test_assess.py`). Not yet run against AWS; the verification pass
+  for inferred mappings is not built.
 - **Unattended release:** the review and Verify are built, but no stage
   produces impact or calibration evidence yet, the spec and accepted risks
   aren't signed off, acceptances aren't authenticated, and no pipeline deploys
