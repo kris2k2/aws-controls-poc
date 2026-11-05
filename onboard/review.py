@@ -6,9 +6,11 @@ request and the date. It never edits the run and it deploys nothing; it
 writes `review.json`, which a deployment pipeline reads (ADR-0005).
 
 It is deliberately critical. It trusts nothing the earlier stages say about
-themselves: it re-runs Select and Generate from the run's findings and
-request and requires the same files byte for byte, then checks the policies
-it is about to release on its own terms. What it finds is either:
+themselves: it re-runs Select, Generate and Verify from the run's findings,
+request and API contract and requires the same files byte for byte, then
+checks the policies it is about to release on its own terms. Proofs come
+only from its own run of Verify (ADR-0006); outside evidence can supply
+impact replays and calibration, never proofs. What it finds is either:
 
 - a **blocker**: the run is wrong or unproven in a way no person may wave
   through (a tampered file, a failed proof, an unexpected Allow). The run must
@@ -39,11 +41,13 @@ from .generate import ENDPOINT_BASE_ALLOW, MAX_POLICY_CHARS, GenerateError, gene
 from .model import Criticality, Mode, _Ordered
 from .request import OnboardingRequest
 from .select import SelectError, select
+from .verify import VerifyError, contract_actions, deny_statements, sha256, verify
 
 SCHEMA = "review/v1"
 EVIDENCE_SCHEMA = "evidence/v1"
 ACCEPTANCES_SCHEMA = "acceptances/v1"
 EVIDENCE_KINDS = ("proof", "impact", "calibration")
+EXTERNAL_KINDS = ("impact", "calibration")  # proofs come only from the reviewer's own run of Verify
 RESULTS = ("pass", "fail")
 
 
@@ -64,11 +68,6 @@ AUTO_ACCEPT_CEILING: dict[Criticality, Risk | None] = {
 
 # Calibration evidence holds only for the evaluator it was produced against.
 EVALUATOR_SHA256 = hashlib.sha256(Path(evaluator.__file__).read_bytes()).hexdigest()
-
-
-def sha256(document) -> str:
-    """The hash of a JSON document in canonical form (sorted keys, no whitespace)."""
-    return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _plain(document):
@@ -97,6 +96,11 @@ def load_run(run: Path) -> tuple[dict, list[str]]:
     files["policies"] = {p.stem: _read(p, problems) for p in sorted((run / "org-policies").glob("*.json"))}
     if not files["policies"]:
         problems.append("org-policies/ holds no policies: run generate first")
+    # Resolve's contract and Verify's report are optional: without the contract
+    # there are no proofs (doubts); a verification.json present must reproduce.
+    for name, key in (("capability-profile", "profile"), ("verification", "verification")):
+        path = run / f"{name}.json"
+        files[key] = _read(path, problems) if path.exists() else None
     return files, problems
 
 
@@ -157,11 +161,6 @@ def _reproduce(request: OnboardingRequest, run: dict, catalog: dict, out: _Findi
                           "differs from what this request and findings produce")
 
 
-def deny_statements(policies: dict) -> list[tuple[str, dict]]:
-    return [(name, stmt) for name, doc in sorted(policies.items())
-            for stmt in doc.get("Statement", []) if stmt.get("Effect") == "Deny"]
-
-
 def check_policies(policies: dict, generation: dict, controls: dict, out: _Findings) -> None:
     """Checks on the documents to be released, independent of how they were made."""
     sids = {cid.replace("-", ""): cid for cid in controls}
@@ -192,18 +191,56 @@ def check_policies(policies: dict, generation: dict, controls: dict, out: _Findi
                 out.block("effect", f"{name}/{stmt.get('Sid', i)}", f"has Effect {effect!r}")
 
 
-def _evidence_index(evidence: dict | None, problems: list[str]) -> dict:
-    """{(kind, binding hash): [item, ...]} for well-formed evidence items."""
+def _evidence_index(evidence: list[dict], proofs: list[dict], problems: list[str]) -> dict:
+    """{(kind, binding hash): [item, ...]}: outside impact and calibration evidence, plus Verify's proofs."""
     index: dict = {}
-    for i, item in enumerate((evidence or {}).get("items", [])):
-        if not isinstance(item, dict) or item.get("kind") not in EVIDENCE_KINDS \
-                or item.get("result") not in RESULTS or not isinstance(item.get("source"), str):
-            problems.append(f"evidence item {i} needs kind ({'/'.join(EVIDENCE_KINDS)}), "
-                            f"result ({'/'.join(RESULTS)}) and source")
-            continue
-        binding = item.get("evaluator_sha256") if item["kind"] == "calibration" else item.get("statement_sha256")
-        index.setdefault((item["kind"], binding), []).append(item)
+    for item in proofs:
+        index.setdefault(("proof", item["statement_sha256"]), []).append(item)
+    for n, document in enumerate(evidence):
+        for i, item in enumerate(document.get("items", [])):
+            where = f"evidence file {n + 1}, item {i}"
+            if not isinstance(item, dict) or item.get("kind") not in EVIDENCE_KINDS \
+                    or item.get("result") not in RESULTS or not isinstance(item.get("source"), str):
+                problems.append(f"{where} needs kind ({'/'.join(EXTERNAL_KINDS)}), "
+                                f"result ({'/'.join(RESULTS)}) and source")
+                continue
+            if item["kind"] not in EXTERNAL_KINDS:
+                problems.append(f"{where} is a proof: proofs come only from the reviewer's own run of Verify; "
+                                "ignored")
+                continue
+            binding = item.get("evaluator_sha256") if item["kind"] == "calibration" else item.get("statement_sha256")
+            index.setdefault((item["kind"], binding), []).append(item)
     return index
+
+
+def check_verification(request: OnboardingRequest, run: dict, out: _Findings, problems: list[str]) -> list[dict]:
+    """Run Verify; return its proofs. Failures block; accepted risks and an unsigned spec are doubts."""
+    if run.get("profile") is None:
+        problems.append("capability-profile.json is missing, so nothing is proved: run resolve into the run")
+        return []
+    try:
+        findings = load_findings(run["findings"])
+        result = verify(request, findings, run["controls"], run["policies"],
+                        contract_actions(run["profile"], findings["service"]))
+    except (FindingsError, VerifyError) as exc:
+        problems.append(f"nothing is proved: {exc}")
+        return []
+    if run.get("verification") is not None and run["verification"] != result:
+        out.block("reproducible", "verification.json", "differs from what Verify produces for this run")
+    for failure in result["failures"]:
+        out.block("verify", "run", failure)
+    spec = result["spec"]
+    if spec["status"] != "approved":
+        out.doubt("security-spec", spec["service"], Risk.MEDIUM,
+                  f"proofs are against the {spec['service']} security spec, which is {spec['status']}",
+                  "the security spec says what each of these controls must deny", spec)
+    for risk in result["accepted_risks"]:
+        if risk["status"] == "approved":  # signed off in the spec, through its reviewed pull request
+            continue
+        out.doubt("accepted-risk", risk["id"], Risk.MEDIUM,
+                  f"{risk['risk']} Reach: {risk['reach']} ({risk['status']})",
+                  f"the gap is acceptable for {', '.join(risk['controls'])}, as far as it reaches", risk)
+    return result["proofs"]
 
 
 _STATEMENT_DOUBTS = {
@@ -214,10 +251,10 @@ _STATEMENT_DOUBTS = {
 }
 
 
-def check_evidence(request: OnboardingRequest, policies: dict, controls: dict, evidence: dict | None,
-                   out: _Findings, problems: list[str]) -> list[dict]:
+def check_evidence(request: OnboardingRequest, policies: dict, controls: dict, evidence: list[dict],
+                   proofs: list[dict], out: _Findings, problems: list[str]) -> list[dict]:
     """Every deployed deny needs a proof, and an impact replay where it can break running workloads."""
-    index = _evidence_index(evidence, problems)
+    index = _evidence_index(evidence, proofs, problems)
     sids = {cid.replace("-", ""): cid for cid in controls}
     for name, stmt in deny_statements(policies):
         cid = sids.get(stmt.get("Sid"))
@@ -232,7 +269,7 @@ def check_evidence(request: OnboardingRequest, policies: dict, controls: dict, e
             failed = [i for i in items if i["result"] == "fail"]
             if failed:
                 out.block(f"evidence-{kind}", f"{name}/{stmt['Sid']}",
-                          f"{failed[0]['source']}: {failed[0].get('detail', 'failed')}")
+                          f"{failed[0]['source']}: {failed[0].get('detail') or 'failed'}")
             elif not items:
                 detail, means = _STATEMENT_DOUBTS[kind]
                 out.doubt(f"evidence-{kind}", f"{name}/{stmt['Sid']}", Risk.HIGH if shared else Risk.MEDIUM,
@@ -368,11 +405,15 @@ def _acceptances(acceptances: dict | None, maker: str, today: dt.date, problems:
 # ---------------------------------------------------------------- review
 
 
-def review(request: OnboardingRequest, run: dict, *, evidence: dict | None = None,
+def review(request: OnboardingRequest, run: dict, *, evidence: dict | list[dict] | None = None,
            acceptances: dict | None = None, catalog: dict | None = None,
            load_problems: tuple[str, ...] = (), today: dt.date | None = None) -> dict:
-    """Return the review document for a run (see the module docstring)."""
+    """Return the review document for a run (see the module docstring).
+
+    `evidence` is one or more evidence/v1 documents: impact replays and calibration.
+    """
     today = today or dt.date.today()
+    evidence = [evidence] if isinstance(evidence, dict) else list(evidence or [])
     out, notes = _Findings(), []
     for problem in load_problems:
         out.block("complete", "run", problem)
@@ -382,7 +423,8 @@ def review(request: OnboardingRequest, run: dict, *, evidence: dict | None = Non
         _reproduce(request, run, catalog if catalog is not None else load_index(), out)
     if complete and not out.blockers:
         check_policies(run["policies"], run["generation"], run["controls"], out)
-        stale = check_evidence(request, run["policies"], run["controls"], evidence, out, notes)
+        proofs = check_verification(request, run, out, notes)
+        stale = check_evidence(request, run["policies"], run["controls"], evidence, proofs, out, notes)
         check_selection(request, run, out)
     else:
         stale = []  # nothing past a broken run is worth reviewing

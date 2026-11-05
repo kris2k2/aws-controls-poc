@@ -144,9 +144,10 @@ def cmd_review(args) -> int:
     request = _load_request(args.request)
     run = Path(args.run)
     files, problems = load_run(run)
-    evidence_path = Path(args.evidence) if args.evidence else run / "evidence.json"
-    evidence = load_optional(evidence_path if evidence_path.exists() or args.evidence else None,
-                             EVIDENCE_SCHEMA, problems)
+    paths = [Path(e) for e in args.evidence or []]
+    if not paths and (run / "evidence.json").exists():
+        paths = [run / "evidence.json"]
+    evidence = [doc for doc in (load_optional(p, EVIDENCE_SCHEMA, problems) for p in paths) if doc is not None]
     acceptances = load_optional(Path(args.acceptances) if args.acceptances else None, ACCEPTANCES_SCHEMA, problems)
     result = review(request, files, evidence=evidence, acceptances=acceptances,
                     catalog=load_index(Path(args.catalog)), load_problems=tuple(problems))
@@ -218,7 +219,9 @@ def main(argv: list[str] | None = None) -> int:
                                       "(exit 0 release, 3 hold, 4 blocked)")
     p.add_argument("request", help="request JSON file")
     p.add_argument("--run", required=True, help="run directory written by generate")
-    p.add_argument("--evidence", help="verification evidence (default: evidence.json in the run, if present)")
+    p.add_argument("--evidence", action="append",
+                   help="impact or calibration evidence (evidence/v1); repeatable "
+                        "(default: evidence.json in the run, if present)")
     p.add_argument("--acceptances", help="human acceptances of earlier doubts (acceptances/v1)")
     p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
     p.set_defaults(func=cmd_review)
