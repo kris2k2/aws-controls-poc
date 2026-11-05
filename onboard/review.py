@@ -36,6 +36,7 @@ from pathlib import Path
 
 from . import __version__, evaluator
 from .catalog import load_index
+from .compose import ComposeError, compose
 from .controls import GUARDRAIL_TYPES, FindingsError, load_findings
 from .generate import ENDPOINT_BASE_ALLOW, MAX_POLICY_CHARS, GenerateError, generate, policy_size, text_sha256
 from .model import Criticality, Mode, _Ordered
@@ -91,7 +92,7 @@ def load_run(run: Path) -> tuple[dict, list[str]]:
     an incomplete run is reviewed, and blocked."""
     problems: list[str] = []
     files = {name: _read(run / f"{name}.json", problems)
-             for name in ("findings", "selection", "registry", "generation")}
+             for name in ("findings", "selection", "registry", "generation", "composition")}
     files["controls"] = {p.stem: _read(p, problems) for p in sorted((run / "controls").glob("*.json"))}
     files["policies"] = {p.stem: _read(p, problems) for p in sorted((run / "org-policies").glob("*.json"))}
     # Detective and plan-time artifacts, compared as text: Sentinel files aren't JSON.
@@ -147,10 +148,15 @@ def _reproduce(request: OnboardingRequest, run: dict, catalog: dict, out: _Findi
     except (FindingsError, SelectError, GenerateError) as exc:
         out.block("reproducible", "run", f"Select or Generate fails on this run's inputs: {exc}")
         return
+    try:
+        composed = compose(request, generated["report"], generated["policies"])
+    except ComposeError as exc:
+        out.block("reproducible", "composition.json", f"Compose fails on this run's inputs: {exc}")
+        return
     expected = {"selection": selected["selection"], "registry": selected["registry"],
                 "controls": selected["controls"], "generation": generated["report"],
-                "policies": generated["policies"]}
-    for name in ("selection", "registry", "generation"):
+                "policies": generated["policies"], "composition": composed}
+    for name in ("selection", "registry", "generation", "composition"):
         if _plain(expected[name]) != run[name]:
             out.block("reproducible", f"{name}.json", "differs from what this request and findings produce")
     for group, folder in (("controls", "controls"), ("policies", "org-policies")):
@@ -380,6 +386,19 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
                   artifacts)
 
 
+def check_composition(run: dict, out: _Findings) -> None:
+    """Placement is part of the release: over budget blocks, and taking the service away is a decision."""
+    composition = run["composition"]
+    for problem in composition.get("problems", []):
+        out.block("budget", "composition.json", problem)
+    removed = composition.get("removes_service_from") or []
+    if removed:
+        out.doubt("removes-service", composition.get("service", ""), Risk.MEDIUM,
+                  f"detaching the allow-list takes {composition.get('service')} away from {', '.join(removed)}; "
+                  "workloads there lose access",
+                  "removing the service from these accounts and OUs is intended", removed)
+
+
 def _consistency(request: OnboardingRequest, run: dict, out: _Findings) -> None:
     for name, schema in (("selection", "selection/v1"), ("generation", "generation/v1")):
         doc = run[name]
@@ -451,6 +470,7 @@ def review(request: OnboardingRequest, run: dict, *, evidence: dict | list[dict]
         proofs = check_verification(request, run, out, notes)
         stale = check_evidence(request, run["policies"], run["controls"], evidence, proofs, out, notes)
         check_selection(request, run, out)
+        check_composition(run, out)
     else:
         stale = []  # nothing past a broken run is worth reviewing
     accepted = _acceptances(acceptances, request.maker, today, notes)
@@ -482,6 +502,8 @@ def review(request: OnboardingRequest, run: dict, *, evidence: dict | list[dict]
         # A deployment must release exactly these documents.
         "policy_set_sha256": sha256(policies),
         "policies": {name: sha256(doc) for name, doc in sorted(policies.items())},
+        # Where they go: the reproduced placement, budgets and diff (ADR-0011).
+        "composition_sha256": sha256(run["composition"]) if run.get("composition") is not None else None,
         # And exactly these detective artifacts (SHA-256 of each file's bytes).
         "artifacts": {path: text_sha256(text) for path, text in sorted((run.get("artifacts") or {}).items())},
         "blockers": out.blockers,

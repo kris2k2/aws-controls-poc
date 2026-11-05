@@ -16,8 +16,64 @@
         "vpce-0example2222222222"
       ]
     },
-    "ous": [],
-    "policies": []
+    "ous": [
+      {
+        "path": "Sandbox"
+      },
+      {
+        "path": "Sandbox/Preview"
+      },
+      {
+        "path": "Workloads"
+      },
+      {
+        "path": "Workloads/Analytics"
+      }
+    ],
+    "policies": [
+      {
+        "name": "scp-baseline-allow",
+        "type": "scp",
+        "sha256": "0d15613a2479e809ae292512f9197a66d28c3af3926d04bd6f9a9a8934488ab5",
+        "targets": [
+          "Root",
+          "Sandbox",
+          "Sandbox/Preview",
+          "Workloads",
+          "Workloads/Analytics",
+          "111122223333",
+          "444455556666"
+        ]
+      },
+      {
+        "name": "scp-sagemaker-allow",
+        "type": "scp",
+        "sha256": "84046957df76fdafd2634241604fa5c82aef62263166bd2e7e2ddb73bade4c6d",
+        "targets": [
+          "Root",
+          "Workloads",
+          "Workloads/Analytics"
+        ]
+      },
+      {
+        "name": "scp-sagemaker-guardrails",
+        "type": "scp",
+        "sha256": "69ef393ab8650841cc82c228b0bcaa0ac5383cca8f262aa92e4cb0a188891739",
+        "targets": [
+          "Workloads/Analytics"
+        ]
+      }
+    ],
+    "accounts": [
+      {
+        "id": "111122223333",
+        "ou": "Sandbox/Preview"
+      },
+      {
+        "id": "444455556666",
+        "ou": "Workloads/Analytics"
+      }
+    ]
   },
   "maker": "analyst-a",
   "checker": "analyst-b",

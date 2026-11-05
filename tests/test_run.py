@@ -61,7 +61,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(self.first, 3)
         self.assertEqual(self.held["result"], "hold")
         self.assertEqual([s["stage"] for s in self.held["stages"]],
-                         ["resolve", "assess", "select", "generate", "verify", "review and deliver"])
+                         ["resolve", "assess", "select", "generate", "verify", "compose", "review and deliver"])
 
     def test_with_the_checker_s_acceptances_it_delivers(self):
         self.assertEqual(self.second, 0)
@@ -82,7 +82,8 @@ class RunTest(unittest.TestCase):
                              (self.run_dir / "org-policies" / name).read_bytes())
         self.assertEqual((self.bundle / "acceptances.json").read_bytes(), self.acceptances.read_bytes())
         self.assertEqual((self.bundle / "request.json").read_bytes(), REQUEST.read_bytes())
-        for evidence in ("verification.json", "selection.json", "findings.json", "assessment.json"):
+        self.assertEqual(manifest["composition_sha256"], review["composition_sha256"])
+        for evidence in ("verification.json", "selection.json", "findings.json", "assessment.json", "composition.json"):
             self.assertTrue((self.bundle / evidence).is_file(), evidence)
 
     def test_every_outcome_gets_a_report_and_the_bundle_seals_it(self):

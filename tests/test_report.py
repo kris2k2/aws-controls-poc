@@ -20,7 +20,8 @@ def build(tmp: Path, review=True) -> Path:
     request, run = FIXTURES / "request-private-preview.json", tmp / "athena"
     steps = [["resolve", request, "--out", run, "--snapshot", SNAPSHOT],
              ["select", request, "--findings", FIXTURES / "findings.json", "--out", run],
-             ["generate", request, "--run", run], ["verify", request, "--run", run]]
+             ["generate", request, "--run", run], ["verify", request, "--run", run],
+             ["compose", request, "--run", run]]
     if review:
         steps.append(["review", request, "--run", run])
     with redirect_stdout(io.StringIO()):
@@ -44,7 +45,8 @@ class ReportTest(unittest.TestCase):
     def test_it_summarizes_the_service_threats_guardrails_and_review(self):
         for text in ("<h1>Amazon Athena</h1>", "Private Preview", "API surface by risk tier", "Threat vectors",
                      "Data exfiltration", "Privilege escalation", "Implemented guardrails", "scp-athena-guardrails",
-                     "Release review", "On hold", "AR-05 accepted risk", "Sources and integrity"):
+                     "Release review", "On hold", "AR-05 accepted risk", "Sources and integrity",
+                     "Placement in the organization", "Allow-list organization", "Sandbox/Preview"):
             self.assertIn(text, self.html)
         for cid in self.files["controls"]:
             self.assertIn(f"<code>{cid}</code>", self.html)

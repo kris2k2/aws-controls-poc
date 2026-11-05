@@ -8,6 +8,9 @@ the stages wrote (capability-profile, selection, controls, generation,
 verification, review). It decides nothing and adds nothing: a fact that
 isn't in those files isn't in the report.
 
+Placement comes from Compose (`composition.json`): where each policy is
+attached, the quota use on each node, and the changes to the organization.
+
 The page is one self-contained file: inline CSS, no scripts, no fonts or
 images from elsewhere, and a Content-Security-Policy that forbids them.
 Every value from the run is HTML-escaped, and only https links are made
@@ -85,7 +88,8 @@ def _read(path: Path):
 def load(run: Path, review: dict | None = None) -> dict:
     """The run files the report reads. `review` replaces the run's review.json (Deliver passes its own)."""
     files = {name: _read(run / f"{name}.json") for name in
-             ("capability-profile", "selection", "generation", "verification", "review", "assessment")}
+             ("capability-profile", "selection", "generation", "verification", "review", "assessment",
+              "composition")}
     if files["selection"] is None or files["generation"] is None:
         raise ReportError(f"{run} has no selection.json or generation.json: run select and generate first")
     files["controls"] = {p.stem: _read(p) for p in sorted((run / "controls").glob("*.json"))}
@@ -299,6 +303,59 @@ def _guardrails(files: dict) -> str:
     return "".join(out)
 
 
+def _placement(files: dict) -> str:
+    composition = files.get("composition")
+    out = ['<section id="placement"><h2>Placement in the organization</h2>']
+    if not composition:
+        out.append('<p class="muted">Compose hasn\'t run on this run.</p></section>')
+        return "".join(out)
+    out.append(f'<p class="muted">{_e(composition.get("strategy", "").capitalize())} organization: '
+               + ("an SCP allow is needed at every level from the root to the account, so the service is reachable "
+                  "only where its allow-list is attached." if composition.get("strategy") == "allow-list" else
+                  "FullAWSAccess on the root makes the service reachable everywhere, so its denies go on the root.")
+               + "</p>")
+    if composition.get("result") != "fits":
+        out.append('<div class="card bad-edge"><h3>Over budget</h3><ul>'
+                   + "".join(f"<li>{_e(p)}</li>" for p in composition.get("problems", [])) + "</ul></div>")
+    removed = composition.get("removes_service_from") or []
+    if removed:
+        out.append(f'<div class="risk"><b>Removes {_e(composition.get("service"))}</b> from '
+                   f'{_e(", ".join(removed))}: workloads there lose access.</div>')
+    out.append('<div class="table-wrap"><table><thead><tr><th>Policy</th><th>Attached to</th><th>Why</th></tr></thead>'
+               "<tbody>")
+    for name, placement in sorted(composition.get("placements", {}).items()):
+        targets = " ".join(_chip(t, "plain") for t in placement.get("targets", [])) or '<span class="muted">not attached</span>'
+        out.append(f'<tr><th scope="row"><code>{_e(name)}</code></th><td>{targets}</td>'
+                   f'<td class="muted">{_e(placement.get("why"))}</td></tr>')
+    for name, endpoints in sorted(composition.get("endpoints", {}).items()):
+        out.append(f'<tr><th scope="row"><code>{_e(name)}</code></th><td>'
+                   f'{" ".join(_chip(e, "plain") for e in endpoints)}</td><td class="muted">every VPC endpoint the '
+                   "organization runs</td></tr>")
+    out.append("</tbody></table></div>")
+    out.append('<div class="grid">')
+    for b in composition.get("budgets", []):
+        used = 100 * b.get("attached", 0) / (b.get("limit") or 1)
+        out.append(f'<div class="card"><h3><code>{_e(b.get("target"))}</code> · {_e(str(b.get("type")).upper())}</h3>'
+                   f'<p>{_e(b.get("attached"))} of {_e(b.get("limit"))} attached</p>'
+                   f'<div class="meter{" over" if b.get("over") else ""}"><span style="width:{min(used, 100):.1f}%">'
+                   f'</span></div><p class="muted">{_e(", ".join(b.get("policies", [])))}</p></div>')
+    out.append("</div>")
+    diff = composition.get("diff", {})
+    changes: dict[str, int] = {}
+    for d in diff.get("policies", []):
+        changes[d["change"]] = changes.get(d["change"], 0) + 1
+    moves = diff.get("attachments", [])
+    out.append('<div class="card notes"><h3>Changes to the organization</h3><p>'
+               + _e(", ".join(f"{n} to {k}" for k, n in sorted(changes.items())) or "none") + ".</p>")
+    if moves:
+        out.append('<p class="muted">In this order: guardrails go on before allows and come off after them.</p><ol>'
+                   + "".join(f"<li>{_e(m['change'])} <code>{_e(m['policy'])}</code> "
+                             f"{'to' if m['change'] == 'attach' else 'from'} <code>{_e(m['target'])}</code></li>"
+                             for m in moves) + "</ol>")
+    out.append("</div></section>")
+    return "".join(out)
+
+
 def _review(files: dict) -> str:
     review = files.get("review")
     out = ['<section id="review"><h2>Release review</h2>']
@@ -393,7 +450,7 @@ dl{margin:0}dt{font-size:13px;color:var(--muted);margin-top:8px}dd{margin:2px 0 
 .table-wrap{overflow-x:auto;margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
 table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:8px 10px;border-top:1px solid var(--border);vertical-align:top}
 thead th{border-top:0;color:var(--muted);font-weight:600;white-space:nowrap}tbody th{font-weight:500;min-width:220px}
-.notes ul,.sources{margin:0;padding-left:18px}.notes{margin-top:12px}
+.notes ul,.notes ol,.sources{margin:0;padding-left:18px}.notes{margin-top:12px}
 footer{margin-top:48px;color:var(--muted);font-size:13px}
 @media print{body{background:#fff}.card,.tile,.table-wrap{break-inside:avoid}}
 """
@@ -421,7 +478,7 @@ def render(files: dict) -> str:
         + (f'<div class="muted">Reviewed {_e(review["reviewed_on"])}</div>' if review.get("reviewed_on") else "")
         + "</div></header>",
         '<nav aria-label="Sections"><a href="#service">Service</a><a href="#threats">Threat vectors</a>'
-        '<a href="#guardrails">Guardrails</a><a href="#review">Review</a><a href="#sources">Sources</a></nav>',
+        '<a href="#guardrails">Guardrails</a><a href="#placement">Placement</a><a href="#review">Review</a><a href="#sources">Sources</a></nav>',
         '<div class="tiles">'
         + _tile(len(files["controls"]), "controls selected", ", ".join(
             f"{v} {k}" for k, v in sorted((selection.get("counts") or {}).get("mode", {}).items())))
@@ -431,7 +488,8 @@ def render(files: dict) -> str:
                 f"{caught} mutants caught" if proofs else "Verify hasn't run")
         + _tile(len(generation.get("detective_artifacts") or {}), "detective artifacts", "Config, EventBridge, Sentinel")
         + "</div>",
-        _service(files), _threats(files, vectors), _guardrails(files), _review(files), _sources(files),
+        _service(files), _threats(files, vectors), _guardrails(files), _placement(files), _review(files),
+        _sources(files),
         f'<footer>Generated by onboard {_e(__version__)} from the run\'s files; it deploys nothing. '
         "Detective artifacts haven't run in AWS Config, EventBridge or Sentinel unless stated.</footer>",
     ]

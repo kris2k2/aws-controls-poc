@@ -40,11 +40,9 @@ from .verify import sha256 as canonical_sha256
 SCHEMA = "delivery-manifest/v1"
 MANIFEST = "manifest.json"
 # Run files copied into the bundle when present; the first four are required.
-REQUIRED = ("selection.json", "findings.json", "verification.json", "capability-profile.json")
+REQUIRED = ("selection.json", "findings.json", "verification.json", "capability-profile.json", "composition.json")
 OPTIONAL = ("assessment.json", "generation.json", "registry.json")
 NOT_IN_BUNDLE = (
-    "placement of each policy and detective artifact per OU level, account and Region, and the diff against "
-    "org_state (Compose isn't built)",
     "the Config rules, CloudTrail detections and Sentinel policies generation.json lists as pending "
     "(no structured definition yet), and permissions boundaries",
 )
@@ -116,8 +114,9 @@ def deliver(review: dict, run: Path, out: Path, *, request_bytes: bytes,
         "policies": {name: {"file": f"policies/{name}.json", "sha256": hashes[name]} for name in sorted(hashes)},
         "artifacts": artifact_hashes,
         "files": {path: _file_sha256(raw) for path, raw in sorted(files.items())},
-        "deploys": "nothing: a deployment pipeline checks this bundle (onboard check-delivery) and places the "
-                   "policies and detective artifacts",
+        "composition_sha256": review.get("composition_sha256"),
+        "deploys": "nothing: a deployment pipeline checks this bundle (onboard check-delivery), then applies "
+                   "composition.json: its attachments and detachments, in the order it lists them",
         "not_in_bundle": list(NOT_IN_BUNDLE),
     }
 
