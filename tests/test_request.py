@@ -91,6 +91,28 @@ class ParseRequestTest(unittest.TestCase):
         self.assertIn("exceptions[1] expired on 2026-10-30", problems)
         self.assertIn("exceptions[2].expires must be an ISO date", problems)
 
+    def test_exception_principals_name_exactly_one_role(self):
+        valid = {"principal": "arn:aws:iam::111122223333:role/Example", "control_id": "EX-1",
+                 "owner": "team-a", "expires": "2027-01-31", "rationale": "migration"}
+        for principal in ("arn:aws:iam::111122223333:role/Ex*", "arn:aws:iam::*:role/Example",
+                          "arn:aws:iam::111122223333:user/Example", "Example"):
+            with self.subTest(principal=principal):
+                problems = self.problems(preview_request(exceptions=[{**valid, "principal": principal}]))
+                self.assertIn("exceptions[0].principal must be one IAM role ARN in a 12-digit account", problems)
+
+    def test_break_glass_principals_are_roles_in_named_accounts(self):
+        ok = ["arn:aws:iam::111122223333:role/BreakGlass-*", "arn:aws:iam::111122223333:role/breakglass/*",
+              "arn:aws:iam::444455556666:role/BreakGlass-Responder"]
+        self.assertEqual(parse_request(preview_request(break_glass_principals=ok), today=TODAY).break_glass_principals,
+                         tuple(ok))
+        # A wildcard account matches a role of that name in any account, even outside the organization.
+        for bad in ("arn:aws:iam::*:role/BreakGlass-*", "arn:aws:iam::111122223333:role/*",
+                    "arn:aws:iam::111122223333:role/Break*Glass", "arn:*:iam::111122223333:role/BreakGlass-*",
+                    "arn:aws:iam::111122223333:user/BreakGlass"):
+            with self.subTest(principal=bad):
+                self.assertIn("break_glass_principals must be IAM role ARNs in a 12-digit account",
+                              self.problems(preview_request(break_glass_principals=[bad])))
+
     def test_internal_restricted_is_the_moderate_default(self):
         r = parse_request(preview_request(data_classification="Internal Restricted"), today=TODAY)
         self.assertEqual((r.criticality, r.criticality_source), (Criticality.MODERATE, "default"))

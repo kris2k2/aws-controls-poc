@@ -32,6 +32,13 @@ CLASSIFICATION_CRITICALITY = {
 }
 
 _ACCOUNT_ID = re.compile(r"^\d{12}$")
+# Exempt principals are IAM roles in a named account. A wildcard account would
+# let a role of that name in any account, even outside the organization, skip
+# the guardrails. Break-glass may end in one * after a literal name; an
+# exception names exactly one role.
+_ROLE_NAME = r"[A-Za-z0-9_+=,.@-]+(/[A-Za-z0-9_+=,.@-]+)*"
+_BREAK_GLASS = re.compile(rf"^arn:aws:iam::\d{{12}}:role/{_ROLE_NAME}/?\*?$")
+_EXCEPTION_PRINCIPAL = re.compile(rf"^arn:aws:iam::\d{{12}}:role/{_ROLE_NAME}$")
 _REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d$")
 _SERVICE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
 _KNOWN_FIELDS = {
@@ -206,6 +213,10 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         if expires <= today:
             problems.append(f"{where} expired on {expires.isoformat()}")
             continue
+        if not _EXCEPTION_PRINCIPAL.match(exc["principal"]):
+            problems.append(f"{where}.principal must be one IAM role ARN in a 12-digit account, "
+                            f"with no wildcards: {exc['principal']}")
+            continue
         exceptions.append(OnboardingException(exc["principal"], exc["control_id"], exc["owner"],
                                               expires, exc["rationale"]))
 
@@ -227,6 +238,10 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
     jurisdictions = _strings(data.get("jurisdictions"), "jurisdictions", problems)
     excluded = _strings(data.get("capabilities_excluded"), "capabilities_excluded", problems)
     break_glass = _strings(data.get("break_glass_principals"), "break_glass_principals", problems)
+    bad = [b for b in break_glass if not _BREAK_GLASS.match(b)]
+    if bad:
+        problems.append("break_glass_principals must be IAM role ARNs in a 12-digit account, optionally "
+                        f"ending in one * after a literal name: {', '.join(bad)}")
 
     if problems:
         raise RequestError(problems)

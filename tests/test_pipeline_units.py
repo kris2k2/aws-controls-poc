@@ -105,6 +105,11 @@ class FindingsTest(unittest.TestCase):
         cand["guardrail"]["conditions"] = {"NumericLessThan": {"aws:MultiFactorAuthAge": "3600"}}
         self.assertIn("unsupported condition operator NumericLessThan", self.problems(self.findings))
 
+    def test_guardrail_resources_must_be_a_list_of_patterns(self):
+        cand = next(c for c in self.findings["candidates"] if c["control_id"] == "ORG-C-04")
+        cand["guardrail"]["resources"] = "${protected_roles}"
+        self.assertIn("guardrail.resources must be a non-empty list", self.problems(self.findings))
+
     def test_not_planned_needs_a_reason(self):
         self.findings["candidates"][0]["implementations"]["boundary"] = {"status": "not_applicable"}
         self.assertIn("needs a reason when not planned", self.problems(self.findings))
@@ -155,6 +160,27 @@ class GenerateTest(unittest.TestCase):
         controls = select(self.findings, req, CATALOG)["controls"]
         policy = generate(self.findings, controls, req)["policies"]["scp-athena-guardrails"]
         self.assertTrue(all("ArnNotLike" not in s.get("Condition", {}) for s in policy["Statement"]))
+
+    def test_exempt_roles_become_the_protected_resources(self):
+        exception = {"principal": "arn:aws:iam::111122223333:role/migration", "control_id": "ATH-C-02",
+                     "owner": "team-a", "expires": "2099-01-31", "rationale": "migration"}
+        req = request(exceptions=[exception])
+        controls = select(self.findings, req, CATALOG)["controls"]
+        policy = generate(self.findings, controls, req)["policies"]["scp-org-guardrails"]
+        stmt = next(s for s in policy["Statement"] if s["Sid"] == "ORGC04")
+        self.assertEqual(stmt["Resource"], sorted(req.break_glass_principals + (exception["principal"],)))
+        # Only break-glass is exempt from the protection itself, not the exception holder.
+        self.assertEqual(stmt["Condition"]["ArnNotLike"]["aws:PrincipalArn"], sorted(req.break_glass_principals))
+
+    def test_nothing_to_protect_means_no_protection_statement(self):
+        req = request(break_glass_principals=None)
+        controls = select(self.findings, req, CATALOG)["controls"]
+        result = generate(self.findings, controls, req)
+        self.assertEqual(result["report"]["controls"]["ORG-C-04"]["scp"],
+                         {"status": "not_deployed",
+                          "reason": "protected_roles is empty, so the guardrail applies to no resources"})
+        sids = [s["Sid"] for p in result["policies"].values() for s in p["Statement"]]
+        self.assertNotIn("ORGC04", sids)
 
 
 if __name__ == "__main__":

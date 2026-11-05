@@ -55,14 +55,15 @@ def load(name):
     return json.loads((FIXTURES / name).read_text())
 
 
-def req(action, account=PREVIEW, region="ca-central-1", role="analyst", vpce=VPCE, **context):
+def req(action, account=PREVIEW, region="ca-central-1", role="analyst", vpce=VPCE, resource="*", **context):
     ctx = {"aws:ViaAWSService": "false", "aws:PrincipalIsAWSService": "false", "aws:PrincipalOrgID": ORG}
     if vpce:
         ctx["aws:SourceVpce"] = vpce
     ctx.update(context)
     name = "BreakGlass-Responder" if role == "break-glass" else role
     arn = f"arn:aws:iam::{account}:role/{name}"
-    return Request(action=action, principal_arn=arn, principal_account=account, region=region, context=ctx)
+    return Request(action=action, principal_arn=arn, principal_account=account, region=region, resource=resource,
+                   context=ctx)
 
 
 def run_tier(tier, registry=None, criticality=None, exceptions=None):
@@ -132,6 +133,13 @@ class Vectors:
          False, "ORGC03"),
         ("ORG-C-03", "exemption", req("kms:Decrypt", role="break-glass",
                                       **{"aws:ResourceOrgID": ORG, "aws:PrincipalOrgID": OTHER_ORG}), True, None),
+        ("ORG-C-04", "positive", req("iam:CreateRole", resource=f"arn:aws:iam::{PREVIEW}:role/analytics-etl"), True, None),
+        ("ORG-C-04", "negative", req("iam:CreateRole", resource=f"arn:aws:iam::{PREVIEW}:role/BreakGlass-x"),
+         False, "ORGC04"),
+        ("ORG-C-04", "negative", req("iam:UpdateAssumeRolePolicy", account=OTHER,
+                                     resource=f"arn:aws:iam::{OTHER}:role/BreakGlass-Responder"), False, "ORGC04"),
+        ("ORG-C-04", "exemption", req("iam:UpdateAssumeRolePolicy", account=OTHER, role="break-glass",
+                                      resource=f"arn:aws:iam::{OTHER}:role/BreakGlass-Responder"), True, None),
     ]
     # From Contained the preview restriction retires: other organization accounts may use Athena.
     PROMOTION = [("ATH-C-01", "retired", req("athena:StartQueryExecution", account=OTHER), True, None)]
@@ -170,7 +178,7 @@ class JourneyTest(unittest.TestCase):
     def test_private_preview_scope(self):
         _, sel, controls, _ = self.tier("private-preview")
         self.assertEqual(sel["controls"], ["ATH-C-01", "ATH-C-02", "ATH-C-03", "ATH-C-04",
-                                           "ORG-C-01", "ORG-C-02", "ORG-C-03"])
+                                           "ORG-C-01", "ORG-C-02", "ORG-C-03", "ORG-C-04"])
         self.assertEqual({c["mode"] for c in controls.values()}, {"Enforce"})
         self.assertEqual(sel["next_tier"]["tier"], "Contained")
         self.assertEqual(sel["next_tier"]["retires"], ["ATH-C-01"])
@@ -196,8 +204,8 @@ class JourneyTest(unittest.TestCase):
         _, sel, controls, _ = self.tier("contained")
         self.assertNotIn("ATH-C-01", sel["controls"])
         self.assertEqual(sel["retired"], [{"control_id": "ATH-C-01", "reason": "applies until Private Preview"}])
-        self.assertEqual(len(sel["controls"]), 14)
-        self.assertEqual(sel["counts"]["class"], {"Containment": 6, "Supervision": 8})
+        self.assertEqual(len(sel["controls"]), 15)
+        self.assertEqual(sel["counts"]["class"], {"Containment": 7, "Supervision": 8})
         for cid, rec in controls.items():
             if rec["class"] == "Supervision":
                 self.assertIn(rec["mode"], ("Enforce with override", "Enforce"), cid)
@@ -219,14 +227,14 @@ class JourneyTest(unittest.TestCase):
         _, sel, _, _ = self.tier("contained")
         changes = {c["control_id"]: c["change"] for c in sel["registry_changes"]}
         self.assertEqual(changes, {"ORG-C-01": "reused", "ORG-C-02": "reused", "ORG-C-03": "reused",
-                                   "ORG-S-01": "added", "ORG-S-02": "added"})
+                                   "ORG-C-04": "reused", "ORG-S-01": "added", "ORG-S-02": "added"})
 
     # --- Hardened --------------------------------------------------------------------
     def test_hardened_scope(self):
         _, sel, controls, _ = self.tier("hardened")
-        self.assertEqual(len(sel["controls"]), 20)
+        self.assertEqual(len(sel["controls"]), 21)
         self.assertIsNone(sel["next_tier"])
-        self.assertEqual(sel["counts"]["mode"], {"Enforce": 9, "Enforce with override": 5, "Advise": 5, "Report": 1})
+        self.assertEqual(sel["counts"]["mode"], {"Enforce": 10, "Enforce with override": 5, "Advise": 5, "Report": 1})
         self.assertEqual(controls["ATH-H-01"]["mode"], "Advise")   # Low, Security Hub, Moderate
         self.assertEqual(controls["ATH-H-04"]["mode"], "Report")   # Informational
 
@@ -353,7 +361,7 @@ class JourneyCliTest(unittest.TestCase):
                                        "--out", str(run)]), 0)
                 self.assertEqual(main(["generate", str(request), "--run", str(run)]), 0)
                 registry = json.loads((run / "registry.json").read_text())
-            self.assertEqual(len(list((tmp / "hardened" / "controls").glob("*.json"))), 20)
+            self.assertEqual(len(list((tmp / "hardened" / "controls").glob("*.json"))), 21)
             self.assertTrue((tmp / "hardened" / "org-policies" / "scp-org-guardrails.json").exists())
 
 

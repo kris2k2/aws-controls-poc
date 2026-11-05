@@ -16,7 +16,8 @@
   "checker": "analyst-b",
   "data_classification": "Internal Restricted",
   "break_glass_principals": [
-    "arn:aws:iam::*:role/BreakGlass-*"
+    "arn:aws:iam::111122223333:role/BreakGlass-*",
+    "arn:aws:iam::444455556666:role/BreakGlass-*"
   ],
   "capabilities_excluded": [
     "federated and cross-account data catalogs",
