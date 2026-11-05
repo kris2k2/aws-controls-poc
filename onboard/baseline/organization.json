@@ -56,6 +56,25 @@
         },
         "cloudtrail": {
           "detects": "calls to non-global actions in other regions",
+          "match": {
+            "awsRegion": [
+              {
+                "anything-but": "${allowed_regions}"
+              }
+            ],
+            "eventSource": [
+              {
+                "anything-but": [
+                  "iam.amazonaws.com",
+                  "organizations.amazonaws.com",
+                  "sts.amazonaws.com",
+                  "route53.amazonaws.com",
+                  "cloudfront.amazonaws.com",
+                  "support.amazonaws.com"
+                ]
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -142,6 +161,19 @@
         },
         "cloudtrail": {
           "detects": "denied S3 calls to resources outside the organization",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "eventSource": [
+              "s3.amazonaws.com"
+            ]
+          },
+          "requires": [
+            "S3 data events on the organization trail"
+          ],
           "status": "planned"
         },
         "config": {
@@ -227,6 +259,25 @@
         },
         "cloudtrail": {
           "detects": "denied calls from principals outside the organization",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "eventSource": [
+              "s3.amazonaws.com",
+              "kms.amazonaws.com"
+            ],
+            "userIdentity": {
+              "type": [
+                "AWSAccount"
+              ]
+            }
+          },
+          "requires": [
+            "S3 data events on the organization trail"
+          ],
           "status": "planned"
         },
         "config": {
@@ -311,6 +362,34 @@
         },
         "cloudtrail": {
           "detects": "any of the guarded IAM calls on a break-glass or exception role",
+          "match": {
+            "eventName": [
+              "AttachRolePolicy",
+              "CreateRole",
+              "DeleteRole",
+              "DeleteRolePermissionsBoundary",
+              "DeleteRolePolicy",
+              "DetachRolePolicy",
+              "PutRolePermissionsBoundary",
+              "PutRolePolicy",
+              "TagRole",
+              "UntagRole",
+              "UpdateAssumeRolePolicy",
+              "UpdateRole",
+              "UpdateRoleDescription"
+            ],
+            "eventSource": [
+              "iam.amazonaws.com"
+            ],
+            "requestParameters": {
+              "roleName": [
+                "${protected_role_names}"
+              ]
+            }
+          },
+          "optional_parameters": [
+            "protected_role_names"
+          ],
           "status": "planned"
         },
         "config": {
@@ -326,7 +405,6 @@
         },
         "sentinel": {
           "checks": "forbid Terraform changes to break-glass and exception roles",
-          "level": "hard-mandatory",
           "status": "planned"
         },
         "vpce": {
@@ -386,6 +464,23 @@
         },
         "cloudtrail": {
           "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "errorMessage": [
+              {
+                "wildcard": "*explicit deny in a VPC endpoint policy*"
+              }
+            ],
+            "eventSource": [
+              {
+                "exists": true
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -402,7 +497,6 @@
         },
         "sentinel": {
           "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
-          "level": "hard-mandatory",
           "status": "planned"
         },
         "vpce": {
@@ -465,6 +559,23 @@
         },
         "cloudtrail": {
           "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "errorMessage": [
+              {
+                "wildcard": "*explicit deny in a VPC endpoint policy*"
+              }
+            ],
+            "eventSource": [
+              {
+                "exists": true
+              }
+            ]
+          },
           "status": "planned"
         },
         "config": {
@@ -481,7 +592,6 @@
         },
         "sentinel": {
           "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
-          "level": "hard-mandatory",
           "status": "planned"
         },
         "vpce": {
@@ -526,10 +636,25 @@
         },
         "cloudtrail": {
           "detects": "trail changes",
+          "match": {
+            "eventName": [
+              "DeleteTrail",
+              "PutEventSelectors",
+              "PutInsightSelectors",
+              "StopLogging",
+              "UpdateTrail"
+            ],
+            "eventSource": [
+              "cloudtrail.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {
-          "rule": "cloudtrail-enabled / multi-region-cloudtrail-enabled (verify per run)",
+          "managed": {
+            "identifier": "MULTI_REGION_CLOUD_TRAIL_ENABLED"
+          },
+          "rule": "multi-region-cloudtrail-enabled (identifier MULTI_REGION_CLOUD_TRAIL_ENABLED)",
           "status": "planned"
         },
         "rcp": {
@@ -591,6 +716,16 @@
         },
         "cloudtrail": {
           "detects": "recorder changes",
+          "match": {
+            "eventName": [
+              "DeleteConfigurationRecorder",
+              "DeleteDeliveryChannel",
+              "StopConfigurationRecorder"
+            ],
+            "eventSource": [
+              "config.amazonaws.com"
+            ]
+          },
           "status": "planned"
         },
         "config": {

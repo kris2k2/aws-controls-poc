@@ -41,8 +41,10 @@ and none loses a mode.
 
 `(SCP)` or `(RCP)` means the run generated a guardrail statement for that
 control. The detective column lists the platforms each control declares.
-Their generators aren't built yet, so they show as `pending` in
-`generation.json`.
+Generate renders them from each control's structured definition
+([ADR-0009](../adr/0009-detective-and-plan-time-artifacts.md)): at Hardened,
+12 Config rules, 14 EventBridge detections and 12 Sentinel policies. Nine
+stay `pending` with their reason; see section 8.
 
 | Control | What | Class | Severity | Private Preview | Contained | Hardened | Detective |
 |---|---|---|---|---|---|---|---|
@@ -283,16 +285,24 @@ Athena's own denies. Any edited file, failed proof or unexpected Allow
 | F8 | `data_classification` had no mapping to criticality. | Partly decided | Internal Restricted is the classification behind the Moderate default (decided 2026-10-30); Public and Internal imply Low. A classification raises criticality, never lowers it. Labels above Internal Restricted (for example Confidential, the spec's own example) still need a decision; a request using one fails until then. |
 | F9 | **S3 requests made through Athena can't be restricted by `aws:SourceVpce` or `aws:SourceIp`.** | Verified, new | An S3 network perimeter must exempt calls via Athena (`aws:CalledVia`). Recorded as a blind spot on ATH-C-04. |
 | F10 | **The preview restriction must retire on promotion**, but the spec says tiers are cumulative. | Implemented | `until_tier` on a candidate: the control applies until that tier, and the next tier's `selection.json` lists it as retired. |
-| F11 | Most supervision controls are Enforce with override with no guardrail. "Override" then only means the Sentinel soft-mandatory path. | Open | Confirm this is the intended meaning for configuration controls. |
+| F11 | Most supervision controls are Enforce with override with no guardrail. "Override" then only means the Sentinel soft-mandatory path. | Implemented, to confirm | Generate renders Enforce with override as `soft-mandatory` (ADR-0009), and Review still doubts an enforcing control with no guardrail. Confirm this is the intended meaning for configuration controls. |
 | F12 | **Break-glass exemptions could be matched or created by an attacker.** A wildcard account matched roles outside the organization (RCP bypass), and nothing stopped a member creating a `BreakGlass-*` role. | Fixed | Break-glass and exception principals must be role ARNs in a 12-digit account. New shared control ORG-C-04 denies the IAM role changes (and `iam:PassRole`) on every exempt role to everyone but break-glass. |
 | F13 | **ATH-C-03's deny list was hand-picked** and missed two Spark actions. | Fixed | Every capability action in the contract is classified in `onboard/specs/athena-action-review.json` (pending security review); the guardrail denies the reviewed list. |
 | F14 | **Break-glass could move data out of the organization**: it was exempt from the S3 resource perimeter (ORG-C-02). Its reach is set by trust policies the tool doesn't check. | Fixed, pending sign-off | Guardrails can set `break_glass_exempt: false`; the data perimeter (ORG-C-02, ORG-C-03) does. Checking break-glass trust policies is open. |
 | F15 | **The organization's VPC endpoints let data leave with someone else's credentials.** No SCP or RCP applies to an outside principal writing to an outside resource, and the endpoints carried AWS's default full-access policy. | Fixed for traffic through the endpoints | A baseline endpoint policy (ORG-C-05, ORG-C-06) on every endpoint; named exceptions in `trusted_resource_accounts`. Traffic around the endpoints is AR-05: a network control. |
+| F16 | **Break-glass principals are patterns** (`role/BreakGlass-*`), so a detection matching them as exact values never fires. | Fixed | Pattern values become EventBridge `wildcard` filters; a `?` or a pattern inside `anything-but` fails Generate (ADR-0009). |
+| F17 | The analyst's Config rule names for ATH-H-01 and ATH-H-02 (`tagged-athena-workgroup`, `tagged-athena-datacatalog`) aren't in AWS Config's managed rule list as checked on 2026-11-05. | Changed | Both enable their Security Hub controls (Athena.3, Athena.2) instead. ATH-S-02 uses a Guard rule, because `athena-workgroup-encrypted-at-rest` doesn't check that the key is KMS. |
 
 ## 8. Not done yet
 
-- **Detective and plan-time artifacts:** Config rules, CloudTrail detections
-  and Sentinel policies are declared per control but show as `pending`.
+- **Detective and plan-time artifacts:** rendered for every control with a
+  structured definition (ADR-0009). Not run in AWS Config, EventBridge or
+  Sentinel yet: the Guard paths, Terraform attributes and event fields are
+  checked only by the local evaluator. Pending:
+  - ORG-C-01 (Config, Sentinel)
+  - ORG-C-03, ORG-C-05, ORG-C-06 and ATH-S-04 (Config)
+  - ORG-C-04, ORG-C-05 and ORG-C-06 (Sentinel)
+  - permissions boundaries.
 - **Compose:** placement per OU level, budgets across all services, and the
   diff against `org_state`. The tests place organization policies at the
   root and Athena's at the account.

@@ -7,6 +7,8 @@ writes `delivery/` only when that result is `release`:
 
 - `policies/<name>.json`: the released documents, byte for byte as they were
   hashed for the review;
+- `detective/...`: the released Config rules, EventBridge detections and
+  Sentinel policies (ADR-0009), byte for byte as the review hashed them;
 - the evidence behind the decision: `review.json`, `verification.json`,
   `selection.json`, `findings.json`, `assessment.json` (if Assess ran),
   `capability-profile.json`, the request, and the acceptances and evidence
@@ -40,8 +42,10 @@ MANIFEST = "manifest.json"
 REQUIRED = ("selection.json", "findings.json", "verification.json", "capability-profile.json")
 OPTIONAL = ("assessment.json", "generation.json", "registry.json")
 NOT_IN_BUNDLE = (
-    "placement of each policy per OU level, and the diff against org_state (Compose isn't built)",
-    "Config rules, CloudTrail detections and Sentinel policies (pending in generation.json)",
+    "placement of each policy and detective artifact per OU level, account and Region, and the diff against "
+    "org_state (Compose isn't built)",
+    "the Config rules, CloudTrail detections and Sentinel policies generation.json lists as pending "
+    "(no structured definition yet), and permissions boundaries",
 )
 
 
@@ -70,7 +74,15 @@ def deliver(review: dict, run: Path, out: Path, *, request_bytes: bytes,
     if hashes != review.get("policies") or canonical_sha256(documents) != review.get("policy_set_sha256"):
         raise DeliverError("the policies in the run aren't the ones the review released; review the run again")
 
+    artifacts = {p.relative_to(run).as_posix(): p.read_bytes()
+                 for p in sorted((run / "detective").rglob("*")) if p.is_file()}
+    artifact_hashes = {path: _file_sha256(raw) for path, raw in artifacts.items()}
+    if artifact_hashes != (review.get("artifacts") or {}):
+        raise DeliverError("the detective artifacts in the run aren't the ones the review released; "
+                           "review the run again")
+
     files: dict[str, bytes] = {f"policies/{name}.json": raw for name, raw in policies.items()}
+    files.update(artifacts)
     for name in REQUIRED + OPTIONAL:
         path = run / name
         if path.is_file():
@@ -98,9 +110,10 @@ def deliver(review: dict, run: Path, out: Path, *, request_bytes: bytes,
         "residual_risk": review.get("residual_risk"),
         "policy_set_sha256": review["policy_set_sha256"],
         "policies": {name: {"file": f"policies/{name}.json", "sha256": hashes[name]} for name in sorted(hashes)},
+        "artifacts": artifact_hashes,
         "files": {path: _file_sha256(raw) for path, raw in sorted(files.items())},
         "deploys": "nothing: a deployment pipeline checks this bundle (onboard check-delivery) and places the "
-                   "policies",
+                   "policies and detective artifacts",
         "not_in_bundle": list(NOT_IN_BUNDLE),
     }
 
@@ -166,4 +179,10 @@ def check_delivery(bundle: Path) -> list[str]:
     review = json.loads((bundle / "review.json").read_bytes()) if "review.json" in listed else {}
     if review.get("decision") != "release" or review.get("policy_set_sha256") != manifest.get("policy_set_sha256"):
         problems.append("review.json in the bundle doesn't release this policy set")
+    artifacts = manifest.get("artifacts") or {}
+    if set(artifacts) != {p for p in listed if p.startswith("detective/")} \
+            or any(listed[p] != digest for p, digest in artifacts.items()):
+        problems.append("the manifest's artifacts aren't exactly the files under detective/")
+    if (review.get("artifacts") or {}) != artifacts:
+        problems.append("review.json in the bundle doesn't release these detective artifacts")
     return problems

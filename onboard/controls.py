@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from .catalog import CATALOG_ID, FRAMEWORK as NIST
+from .detective import check_definition
 from .model import ControlClass, Severity, Tier
 
 FINDINGS_SCHEMA = "findings/v1"
@@ -134,6 +135,8 @@ def check_candidate(c: Any, where: str, problems: list[str]) -> None:
                 problems.append(f"{where}.implementations.{platform}.status must be one of {', '.join(STATUSES)}")
             elif impl["status"] != "planned" and not impl.get("reason"):
                 problems.append(f"{where}.implementations.{platform} needs a reason when not planned")
+            elif impl["status"] == "planned" and platform in ("config", "cloudtrail", "sentinel"):
+                check_definition(platform, impl, f"{where}.implementations.{platform}", problems)
         if "guardrail" in c:
             gtype = c["guardrail"].get("type") if isinstance(c["guardrail"], dict) else None
             if gtype in GUARDRAIL_TYPES and impls.get(gtype, {}).get("status") != "planned":

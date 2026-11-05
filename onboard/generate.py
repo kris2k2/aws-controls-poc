@@ -1,12 +1,15 @@
 """Generate: render control records into artifacts.
 
-This slice renders the guardrail artifacts: SCP, RCP and VPC endpoint policy
-statements, plus the service's allow-list entry. The endpoint policy goes on
-every VPC endpoint the organization runs: a base allow, so the endpoint stops
-only what its guardrails deny, then those denies. A guardrail applies to every resource unless it
-names `resources` (ARN patterns or ${parameters}). Config rules, CloudTrail
-detections, Sentinel policies and boundaries are reported as pending, not
-silently skipped.
+It renders the guardrail artifacts: SCP, RCP and VPC endpoint policy
+statements, plus the service's allow-list entry; and the detective and
+plan-time artifacts (Config rules, CloudTrail detections, Sentinel policies)
+that a control record defines in structured form (ADR-0009, `detective.py`).
+The endpoint policy goes on every VPC endpoint the organization runs: a base
+allow, so the endpoint stops only what its guardrails deny, then those
+denies. A guardrail applies to every resource unless it names `resources`
+(ARN patterns or ${parameters}). A detective platform
+without a structured definition, and every permissions boundary, is reported
+as pending, not silently skipped.
 
 What each mode does to a guardrail (spec, "What each mode does per artifact"):
 Enforce deploys the deny with an exemption for break-glass principals only
@@ -19,10 +22,11 @@ them in the condition; Advise and Report deploy no guardrail.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 
-from . import __version__
+from . import __version__, detective
 from .controls import GUARDRAIL_TYPES, PLATFORMS
 from .model import Mode
 from .request import OnboardingRequest
@@ -51,6 +55,8 @@ def parameters(request: OnboardingRequest, service: str) -> dict[str, list[str]]
         "protected_roles": sorted(set(request.break_glass_principals)
                                   | {e.principal for e in request.exceptions}),
     }
+    # The same roles by name, as CloudTrail records them in requestParameters.roleName.
+    params["protected_role_names"] = sorted({arn.rsplit("/", 1)[-1] for arn in params["protected_roles"]})
     if isinstance(org.get("organization_id"), str):
         params["org_id"] = [org["organization_id"]]
     endpoints = (org.get("vpc_endpoints") or {}).get(service)
@@ -135,13 +141,41 @@ def policy_size(policy: dict) -> int:
     return len(json.dumps(policy, separators=(",", ":")))
 
 
+def _detective(platform: str, record: dict, impl: dict, params: dict, artifacts: dict, levels: dict) -> dict:
+    """Render one detective or plan-time artifact into `artifacts`; return its status."""
+    try:
+        if platform == "config":
+            path, text = detective.render_config(record, impl)
+        elif platform == "cloudtrail":
+            rendered = detective.render_detection(record, impl, params)
+            if rendered is None:
+                empty = ", ".join(sorted(impl.get("optional_parameters", [])))
+                return {"status": "not_deployed", "reason": f"{empty} is empty, so there is nothing to detect"}
+            path, text = rendered
+        else:
+            path, text, level = detective.render_sentinel(record, impl)
+            levels[path.rsplit("/", 1)[-1]] = level
+    except detective.DetectiveError as exc:
+        raise GenerateError(str(exc)) from exc
+    artifacts[path] = text
+    return {"status": "generated", "file": path}
+
+
+def text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def generate(findings: dict, controls: dict[str, dict], request: OnboardingRequest) -> dict:
-    """Return {"policies": {name: document}, "report": generation report}."""
+    """Return {"policies": {name: document}, "artifacts": {path: text}, "report": generation report}.
+
+    `artifacts` are the detective and plan-time files, by their path in the run directory."""
     service = findings["service"]
     params = parameters(request, service)
     # Shared (registry) controls go to organization-wide policies; Compose places both.
     statements: dict[tuple[str, bool], list] = {(t, s): [] for t in GUARDRAIL_TYPES for s in (False, True)}
     per_control = {}
+    artifacts: dict[str, str] = {}
+    sentinel_levels: dict[str, str] = {}
     for cid in sorted(controls):
         record = controls[cid]
         status = {}
@@ -151,6 +185,11 @@ def generate(findings: dict, controls: dict[str, dict], request: OnboardingReque
                 status[platform] = {"status": impl["status"], "reason": impl["reason"]}
             elif platform in GUARDRAIL_TYPES:
                 status[platform] = {"status": "pending", "reason": "no guardrail defined yet"}
+            elif detective.defined(platform, impl):
+                status[platform] = _detective(platform, record, impl, params, artifacts, sentinel_levels)
+            elif platform in ("config", "cloudtrail", "sentinel"):
+                status[platform] = {"status": "pending",
+                                    "reason": f"no structured {platform} definition in the control record yet"}
             else:
                 status[platform] = {"status": "pending", "reason": f"{platform} generator not built yet"}
         if "guardrail" in record:
@@ -174,6 +213,8 @@ def generate(findings: dict, controls: dict[str, dict], request: OnboardingReque
             if gtype == "vpce":  # endpoint policies replace the default full access, so allow first
                 stmts = [ENDPOINT_BASE_ALLOW] + stmts
             policies[name] = {"Version": "2012-10-17", "Statement": stmts}
+    if sentinel_levels:
+        artifacts["detective/sentinel/sentinel.hcl"] = detective.sentinel_config(sentinel_levels)
     endpoints = sorted({e for ids in (request.org_state.get("vpc_endpoints") or {}).values() for e in ids})
 
     report = {
@@ -189,5 +230,8 @@ def generate(findings: dict, controls: dict[str, dict], request: OnboardingReque
                             "over_limit": policy_size(doc) > MAX_POLICY_CHARS}
                      for name, doc in policies.items()},
         "controls": per_control,
+        # Config rules, EventBridge detections and Sentinel policies, by path in the run.
+        "detective_artifacts": {path: text_sha256(text) for path, text in sorted(artifacts.items())},
+        "detective_notes": list(detective.NOTES) if artifacts else [],
     }
-    return {"policies": policies, "report": report}
+    return {"policies": policies, "artifacts": artifacts, "report": report}
