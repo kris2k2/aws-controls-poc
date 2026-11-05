@@ -15,7 +15,7 @@ the `governance-sync` workflow (or `python3 .governance/tools/governance.py sync
 - What it is: the AWS service onboarding tool (see `README.md`). Python,
   standard library only (ADR-0001); one module per pipeline stage under
   `onboard/`, joined only through files in the run directory.
-- Test: `python3 -m unittest discover -s tests -t .` (offline, under 1 s).
+- Test: `python3 -m unittest discover -s tests -t .` (offline, about 1 s).
   Run: `python3 -m onboard --help`.
 - Tests never touch the network: inject a fetcher or use a snapshot. Fixtures
   are synthetic (account `111122223333`, analysts `analyst-a`/`analyst-b`),
@@ -26,6 +26,11 @@ the `governance-sync` workflow (or `python3 .governance/tools/governance.py sync
   (ADR-0002), in catalog form (`ac-3`, `ac-2.1`) with `catalog_version`. Never
   write one from memory. Refreshing the index (`python3 -m onboard catalog`) is
   its own PR.
+- Generated guardrails are checked against an attacker model (ADR-0003). A
+  new or changed guardrail needs its property in
+  `tests/athena_security_spec.py`, written from the control's objective, not
+  copied from the guardrail. Never weaken a property, drop a mutant or add an
+  equivalent mutant or accepted risk to get green; those need a human.
 - Initial test case: Athena through all three tiers,
   `docs/simulations/athena-journey.md`, tested by `tests/test_athena_journey.py`
   with the fixtures in `tests/fixtures/athena/`. Keep it green; extend it when a

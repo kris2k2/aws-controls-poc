@@ -5,7 +5,7 @@
 | Author | Repository owner, drafted with an AI coding agent |
 | Date | 2026-10-30 |
 | Reviewers | Pending |
-| Related PR / ADR | [ADR-0001](../adr/0001-python-stdlib-staged-pipeline.md) |
+| Related PR / ADR | [ADR-0001](../adr/0001-python-stdlib-staged-pipeline.md), [ADR-0003](../adr/0003-adversarial-verification-of-guardrails.md) |
 
 Scope: the tool as built so far (request validation, the control model, the
 Resolve, Select and Generate stages, and the local policy evaluator). Update this model whenever a stage adds a source, a credential
@@ -51,7 +51,7 @@ request file, written by the analyst but validated as untrusted input;
 | **R**epudiation | Yes | Nobody can show who approved an enforcing control | Maker and checker required and must differ. Approvals over a hashed manifest come with Validate | Partly done |
 | **I**nformation disclosure | Yes | Real org state or account IDs committed with fixtures or run outputs | Fixtures are synthetic (AWS documentation account ID); run outputs live outside the repo; the PII and secret scans run on every commit | Done for this slice |
 | **D**enial of service | Low | A huge or slow response stalls a run | 30 s timeout, 32 MB response cap; failures stop the run with a clear error | Done |
-| **E**levation of privilege | Yes | Generated guardrails are too permissive (a missing exemption check, a wrong condition, an unresolved parameter), or the tool's own credentials are too broad | Containment is always Enforce; the matrix can't drop a mode as criticality rises; a missing parameter or decision fails the run; every generated guardrail has positive, negative and exemption vectors through the local evaluator, and mutation checks show the vectors catch broken exemptions and operator semantics. The evaluator isn't calibrated against the IAM policy simulator yet, so a pass means "as intended". No credentials in this slice; end-state tests will use credentials scoped to a disposable test account only | Partly done |
+| **E**levation of privilege | Yes | Generated guardrails are too permissive (a missing exemption check, a wrong condition, an unresolved parameter), or the tool's own credentials are too broad | Containment is always Enforce; the matrix can't drop a mode as criticality rises; a missing parameter or decision fails the run; every generated guardrail has positive, negative and exemption vectors through the local evaluator. Against an attacker (ADR-0003): each statement is checked to deny exactly what its reviewed security property denies, over every combination of an explicit attacker model (bounded proof); every excluded-capability action in the contract is reviewed; break-glass and exception principals are role ARNs in named accounts, protected by ORG-C-04 from anyone else creating, changing or passing them; every mutant of every statement is caught; deliberate gaps are pinned in an accepted-risk register. The evaluator isn't calibrated against the IAM policy simulator yet, so a pass means "holds in our model of AWS". No credentials in this slice; end-state tests will use credentials scoped to a disposable test account only | Partly done |
 
 Agentic and LLM risks: no model is called yet. When reasoning stages arrive,
 walk prompt injection (fetched docs steering mappings), excessive agency and
@@ -66,11 +66,12 @@ output handling before merge, as ADR-0001 requires.
 ## 4. What are we doing about it?
 
 Mitigations are linked above. Open items: manifest hashing and approvals
-(Validate), the threat-model update for reasoning stages, and the
-credential scope for end-state tests.
+(Validate), the threat-model update for reasoning stages, the
+credential scope for end-state tests, calibrating the evaluator against AWS,
+and security team sign-off of the guardrail spec and accepted risks.
 
 ## 5. Did we do a good job?
 
-- [x] Abuse cases have tests (URL allowlist, redirected index entries, malformed sources, invalid requests)
+- [x] Abuse cases have tests (URL allowlist, redirected index entries, malformed sources, invalid requests, attacks on generated guardrails)
 - [ ] Reviewed by someone outside the implementing team
 - [x] Revisit trigger defined: new source, credential, model call or deployment path
