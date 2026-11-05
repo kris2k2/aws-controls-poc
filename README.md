@@ -17,7 +17,7 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 | Request validation | Done: inputs, defaults, tier rules, maker/checker, exceptions, analyst decisions |
 | Control model | Done: decision matrix, tier floors, escalation |
 | 1. Resolve | Partial: prefixes, actions by risk tier, resources, condition keys, SDK operations. Crosswalk, dependencies, availability and capability flags are still to do |
-| 2. Assess | Not started (the Athena test case uses hand-written findings) |
+| 2. Assess | Partial: the shared organization baseline, the derived preview restriction, and the service's Security Hub controls from the AWS Control Catalog with AWS's severities and NIST mappings; the analyst adds the judgment controls as an overlay ([ADR-0007](docs/adr/0007-assess-from-the-control-catalog.md)). Not yet run against AWS; Config-rule and proactive controls aren't imported |
 | 3. Select | Done: tier scope, modes, retirement on promotion, registry reuse and escalation, checker items, next tier; every NIST SP 800-53 identifier resolved in the pinned OSCAL catalog |
 | 4. Generate | Partial: SCP and RCP guardrails, the allow-list, and the baseline VPC endpoint policy ([ADR-0004](docs/adr/0004-baseline-vpc-endpoint-policy.md)); Config, CloudTrail and Sentinel are reported as pending |
 | Verify | Done for Athena: each generated deny proved against its security property over the attacker model, with mutation testing; writes `verification.json` ([ADR-0006](docs/adr/0006-verify-stage.md)). A new service needs its own spec in `onboard/specs/` |
@@ -34,7 +34,9 @@ Requires Python 3.13 or later. There are no third-party dependencies.
 python3 -m onboard check-request request.json
 python3 -m onboard resolve request.json --out runs/bedrock
 python3 -m onboard resolve request.json --out runs/bedrock --snapshot snapshots/2026-10-30  # offline
-python3 -m onboard select request.json --findings findings.json --out runs/bedrock
+python3 -m onboard assess request.json --run runs/bedrock --overlay overlay.json  # Control Catalog, read-only: needs AWS credentials in the environment
+python3 -m onboard assess request.json --run runs/bedrock --control-catalog-snapshot snapshots/control-catalog  # offline
+python3 -m onboard select request.json --findings runs/bedrock/findings.json --out runs/bedrock
 python3 -m onboard generate request.json --run runs/bedrock
 python3 -m onboard verify request.json --run runs/bedrock  # needs the service's spec in onboard/specs/ (Athena so far) and resolve's output in the run; exit 0 pass, 4 fail
 python3 -m onboard review request.json --run runs/bedrock --acceptances acceptances.json  # exit 0 release, 3 hold, 4 blocked
@@ -54,6 +56,13 @@ A minimal request (synthetic values):
   "checker": "analyst-b"
 }
 ```
+
+Assess calls the AWS Control Catalog in `ca-central-1` with the credentials in
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. Use a role
+that allows only `controlcatalog:ListControls` and
+`controlcatalog:ListControlMappings`. The overlay (`findings-overlay/v1`) holds
+the analyst's candidates for the service; `assessment.json` lists what Assess
+left to the analyst.
 
 Keep real requests, org state and run outputs out of the repository.
 
