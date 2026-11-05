@@ -31,8 +31,8 @@ _NEGATED = {"StringNotEquals", "StringNotLike", "ArnNotLike"}
 @dataclass(frozen=True)
 class Request:
     action: str
-    principal_arn: str
-    principal_account: str
+    principal_arn: str | None  # None for an AWS service principal, which has no ARN
+    principal_account: str | None
     region: str
     resource: str = "*"
     context: dict = field(default_factory=dict)
@@ -45,6 +45,7 @@ class Request:
             "aws:principalaccount": self.principal_account,
             "aws:requestedregion": self.region,
         }
+        base = {k: v for k, v in base.items() if v is not None}
         base.update({k.lower(): v for k, v in self.context.items()})
         return base
 
