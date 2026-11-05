@@ -6,8 +6,11 @@
 /CLAUDE.md      @kris2k2
 /.claude/       @kris2k2
 /.github/       @kris2k2
-# The guardrail security spec, attacker model and accepted risks (ADR-0003):
-# add the security team here once it has a GitHub team.
-/tests/athena_security_spec.py               @kris2k2
-/tests/adversary.py                          @kris2k2
-/tests/fixtures/athena/action-review.json    @kris2k2
+# The guardrail security specs, attacker model, accepted risks and the
+# release reviewer (ADR-0003, ADR-0005, ADR-0006): add the security team here
+# once it has a GitHub team.
+/onboard/specs/                              @kris2k2
+/onboard/adversary.py                        @kris2k2
+/onboard/evaluator.py                        @kris2k2
+/onboard/verify.py                           @kris2k2
+/onboard/review.py                           @kris2k2

@@ -716,7 +716,7 @@
           "status": "not_applicable"
         }
       },
-      "notes": "Deny list from tests/fixtures/athena/action-review.json, which classifies every Spark action in the contract; reads and clean-up stay allowed.",
+      "notes": "Deny list from onboard/specs/athena-action-review.json, which classifies every Spark action in the contract; reads and clean-up stay allowed.",
       "objective": "no-external-sharing",
       "severity": "High",
       "severity_source": "rubric",

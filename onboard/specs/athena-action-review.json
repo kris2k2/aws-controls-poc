@@ -2,7 +2,7 @@
   "service": "athena",
   "contract": "tests/fixtures/service-reference/2026-10-30/athena.json",
   "status": "proposed: written with an AI coding agent, pending security review",
-  "how_to_use": "Every action in the contract is listed in 'actions'. When a contract refresh adds or removes one, the adversarial tests fail until it is reviewed here. Each capability control lists the actions it denies and the capability actions it deliberately allows, with the reason.",
+  "how_to_use": "Every action in the contract is listed in 'actions'. When a contract refresh adds or removes one, the adversarial tests fail until it is reviewed here, and Verify fails the capability controls while a contract action is unclassified. Each capability control lists the actions it denies and the capability actions it deliberately allows, with the reason.",
   "actions": [
     "BatchGetNamedQuery",
     "BatchGetPreparedStatement",

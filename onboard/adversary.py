@@ -4,8 +4,8 @@ The journey tests show each guardrail works for the requests its author thought
 of. This module checks it against the requests an attacker can make instead:
 
 - A security property (`Property`) states, independently of the generated JSON,
-  which requests a control must deny. The properties live in
-  `tests/athena_security_spec.py`, the file the security team reviews.
+  which requests a control must deny. The properties live in `onboard/specs/`,
+  the files the security team reviews.
 - The attacker model (`Space`) lists what a request can vary: the action, the
   resource, the principal (role name, path and account, inside or outside the
   organization, a standalone account in no organization, anonymous, or an AWS
@@ -28,9 +28,12 @@ of. This module checks it against the requests an attacker can make instead:
   the whole decision, under the same scoping: SCPs bind organization
   principals, RCPs organization resources, endpoint policies every request
   through the organization's endpoints.
-- `mutants` breaks a statement the ways a generator bug would; the tests
-  require every mutant to produce a counterexample, which shows the check
+- `mutants` breaks a statement the ways a generator bug would; Verify
+  requires every mutant to produce a counterexample, which shows the check
   has teeth.
+
+The Verify stage (`onboard/verify.py`) runs these checks on every run; the
+tests run them too, together with checks that need a test organization.
 
 Everything here is relative to the local evaluator's reading of IAM. Until
 that evaluator is calibrated against AWS (the policy simulator and live calls
@@ -47,7 +50,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
-from onboard.evaluator import Decision, Request, evaluate, statement_applies
+from .evaluator import Decision, Request, evaluate, statement_applies
 
 # Values the request names nowhere. Synthetic, from the AWS documentation ranges.
 ORG_ACCOUNT_ON_NO_LIST = "777788889999"   # in the organization, on no list in the request
@@ -89,6 +92,10 @@ KEY_DIMENSION = {
     "aws:requesttag/cost-center": "tag",
 }
 DIMENSIONS = ("principal", "region", "vpce", "via", "resource_org", "resource_account", "tag")
+
+
+class ModelError(ValueError):
+    """A statement or property steps outside the attacker model, so no proof is possible."""
 
 
 @functools.lru_cache(maxsize=4096)
@@ -208,7 +215,7 @@ class Space:
         for pattern in facts.protected_roles:
             role_resources.update(sample(pattern))
         self.resources = sorted(role_resources) + [
-            f"arn:aws:athena:{facts.allowed_regions[0]}:{org_accounts[0]}:workgroup/primary",
+            f"arn:aws:{facts.service}:{facts.allowed_regions[0]}:{org_accounts[0]}:example/primary",
             "arn:aws:s3:::example-bucket/key"]
 
     def with_literals(self, patterns) -> list[str]:
@@ -237,7 +244,7 @@ class View:
         if name.startswith("_"):
             raise AttributeError(name)
         if name not in self._reads:
-            raise AssertionError(f"the property reads {name!r} without declaring it in reads")
+            raise ModelError(f"the property reads {name!r} without declaring it in reads")
         return self._point[name]
 
 
@@ -250,7 +257,7 @@ class Property:
 
     control: str
     title: str
-    constrains: str                       # CONSTRAINS_PRINCIPALS or CONSTRAINS_RESOURCES
+    constrains: str                       # CONSTRAINS_PRINCIPALS, CONSTRAINS_RESOURCES or CONSTRAINS_ENDPOINTS
     actions: Patterns = ()
     not_actions: Patterns = ()
     resources: Patterns = ("*",)
@@ -317,8 +324,8 @@ def to_request(point: dict, facts: Facts) -> Request:
 def default_point(facts: Facts, **overrides) -> dict:
     """An ordinary request: an analyst in the first preview (or organization) account, done right."""
     account = (facts.preview_accounts or (ORG_ACCOUNT_ON_NO_LIST,))[0]
-    point = {"principal": role(account, "analyst", facts.org_id), "action": f"{facts.service}:GetWorkGroup",
-             "resource": f"arn:aws:athena:{facts.allowed_regions[0]}:{account}:workgroup/primary",
+    point = {"principal": role(account, "analyst", facts.org_id), "action": f"{facts.service}:Get",
+             "resource": f"arn:aws:{facts.service}:{facts.allowed_regions[0]}:{account}:example/primary",
              "region": facts.allowed_regions[0], "vpce": (facts.vpce_ids or (None,))[0], "via": False,
              "resource_org": facts.org_id, "resource_account": account, "tag": None}
     point.update(overrides)
@@ -333,7 +340,7 @@ def statement_dimensions(stmt: dict | None) -> set[str]:
         for key in keys:
             dim = KEY_DIMENSION.get(key.lower())
             if dim is None:
-                raise AssertionError(f"{stmt.get('Sid')} reads {key}, which the attacker model doesn't vary")
+                raise ModelError(f"{stmt.get('Sid')} reads {key}, which the attacker model doesn't vary")
             dims.add(dim)
     return dims
 
@@ -526,10 +533,10 @@ def _replace_op(stmt: dict, op: str, key: str, new_op: str) -> dict:
     return m
 
 
-def endpoint_allow_mutants(allow_stmt: dict):
+def endpoint_allow_mutants(allow_stmt: dict, org_id: str):
     yield "narrow the base allow to s3:*", {**allow_stmt, "Action": "s3:*"}
     yield "limit the base allow to organization principals", {
-        **allow_stmt, "Condition": {"StringEquals": {"aws:PrincipalOrgID": "o-exampleorgid"}}}
+        **allow_stmt, "Condition": {"StringEquals": {"aws:PrincipalOrgID": org_id}}}
 
 
 def allow_list_mutants(allow_stmt: dict):
