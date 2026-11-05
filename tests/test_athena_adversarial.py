@@ -231,8 +231,6 @@ def _account_of(arn):
 EQUIVALENT_MUTANTS = {
     ("ORG-C-02", r"(drop BoolIfExists|change BoolIfExists to Bool on) aws:PrincipalIsAWSService"):
         "SCPs never apply to AWS service principals, so the condition is always true where the SCP applies",
-    ("ORG-C-03", r"drop (\S+ from )?ArnNotLike aws:PrincipalArn"):
-        "break-glass principals are organization principals, which ORG-C-03 never denies: the exemption is inert",
     ("ORG-C-03", r"change BoolIfExists to Bool on aws:PrincipalIsAWSService"):
         "the model always sets aws:PrincipalIsAWSService; calibration against AWS should confirm it is always present",
     ("ATH-C-04", r"change BoolIfExists to Bool on aws:ViaAWSService"):

@@ -62,6 +62,8 @@ def _check_guardrail(g: Any, where: str, problems: list[str]) -> None:
         if key in g and (not isinstance(g[key], list) or not g[key]
                          or not all(isinstance(a, str) and ":" in a for a in g[key])):
             problems.append(f"{where}.guardrail.{key} must be a list of prefix:Action strings")
+    if not isinstance(g.get("break_glass_exempt", True), bool):
+        problems.append(f"{where}.guardrail.break_glass_exempt must be true or false")
     resources = g.get("resources", ["*"])
     if not isinstance(resources, list) or not resources or not all(isinstance(r, str) and r for r in resources):
         problems.append(f"{where}.guardrail.resources must be a non-empty list of ARN patterns or ${{parameters}}")

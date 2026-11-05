@@ -110,6 +110,11 @@ class FindingsTest(unittest.TestCase):
         cand["guardrail"]["resources"] = "${protected_roles}"
         self.assertIn("guardrail.resources must be a non-empty list", self.problems(self.findings))
 
+    def test_break_glass_exempt_must_be_a_boolean(self):
+        cand = next(c for c in self.findings["candidates"] if c["control_id"] == "ORG-C-02")
+        cand["guardrail"]["break_glass_exempt"] = "no"
+        self.assertIn("guardrail.break_glass_exempt must be true or false", self.problems(self.findings))
+
     def test_not_planned_needs_a_reason(self):
         self.findings["candidates"][0]["implementations"]["boundary"] = {"status": "not_applicable"}
         self.assertIn("needs a reason when not planned", self.problems(self.findings))
@@ -171,6 +176,15 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual(stmt["Resource"], sorted(req.break_glass_principals + (exception["principal"],)))
         # Only break-glass is exempt from the protection itself, not the exception holder.
         self.assertEqual(stmt["Condition"]["ArnNotLike"]["aws:PrincipalArn"], sorted(req.break_glass_principals))
+
+    def test_the_data_perimeter_exempts_no_one(self):
+        req = request()
+        controls = select(self.findings, req, CATALOG)["controls"]
+        policies = generate(self.findings, controls, req)["policies"]
+        stmts = {s["Sid"]: s for p in policies.values() for s in p["Statement"]}
+        for sid in ("ORGC02", "ORGC03"):
+            self.assertNotIn("ArnNotLike", stmts[sid].get("Condition", {}), sid)
+        self.assertIn("ArnNotLike", stmts["ORGC01"]["Condition"])  # other guardrails keep break-glass
 
     def test_nothing_to_protect_means_no_protection_statement(self):
         req = request(break_glass_principals=None)

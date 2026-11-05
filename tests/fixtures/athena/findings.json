@@ -119,6 +119,7 @@
         "actions": [
           "s3:*"
         ],
+        "break_glass_exempt": false,
         "conditions": {
           "BoolIfExists": {
             "aws:PrincipalIsAWSService": "false"
@@ -154,7 +155,7 @@
           "status": "not_expressible"
         }
       },
-      "notes": "Athena query results, UNLOAD and CTAS write to S3 with the caller's permissions, so the S3 resource perimeter contains them.",
+      "notes": "Athena query results, UNLOAD and CTAS write to S3 with the caller's permissions, so the S3 resource perimeter contains them. Break-glass is not exempt: the data perimeter holds for every principal, so a break-glass session can't move data out of the organization.",
       "objective": "resource-perimeter",
       "severity": "High",
       "severity_source": "rubric",
@@ -202,6 +203,7 @@
           "s3:*",
           "kms:*"
         ],
+        "break_glass_exempt": false,
         "conditions": {
           "BoolIfExists": {
             "aws:PrincipalIsAWSService": "false"
@@ -237,7 +239,7 @@
           "status": "not_expressible"
         }
       },
-      "notes": "Athena itself isn't RCP-supported; its data perimeter is the S3 and KMS resources it reads and writes.",
+      "notes": "Athena itself isn't RCP-supported; its data perimeter is the S3 and KMS resources it reads and writes. Break-glass is not exempt: the data perimeter holds for every principal, so a break-glass session can't move data out of the organization.",
       "objective": "identity-perimeter",
       "severity": "Critical",
       "severity_source": "rubric",
