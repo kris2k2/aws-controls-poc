@@ -78,6 +78,21 @@ class EvaluatorTest(unittest.TestCase):
         self.assertFalse(evaluate(inside, [[ALLOW_ALL]], [[rcp]]).allowed)
         self.assertTrue(evaluate(outside, [[ALLOW_ALL]], [[rcp]]).allowed)
 
+    def test_endpoint_policies_bind_every_caller_through_the_endpoint(self):
+        endpoint = {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*"},
+                                  deny({"StringNotEqualsIfExists": {"aws:PrincipalOrgID": "o-exampleorgid"}},
+                                       Principal="*", Sid="E")]}
+        outsider = Request("s3:PutObject", "arn:aws:iam::999988887777:role/x", "999988887777", "ca-central-1",
+                           context={"aws:PrincipalOrgID": "o-otherorgid"}, resource_in_org=False)
+        self.assertEqual(evaluate(outsider, [], [], [endpoint]).statement, "E")  # no SCP applies to it
+        self.assertTrue(evaluate(outsider, [], []).allowed)                     # not through the endpoint
+        member = Request("s3:PutObject", "arn:aws:iam::111122223333:role/x", "111122223333", "ca-central-1",
+                         context={"aws:PrincipalOrgID": "o-exampleorgid"})
+        self.assertTrue(evaluate(member, [[ALLOW_ALL]], [], [endpoint]).allowed)
+        only_s3 = {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:*", "Resource": "*"}]}
+        decision = evaluate(r("athena:GetWorkGroup"), [[ALLOW_ALL]], [], [only_s3])
+        self.assertEqual((decision.allowed, decision.reason), (False, "no VPC endpoint policy allows it"))
+
 
 class FindingsTest(unittest.TestCase):
     def setUp(self):

@@ -20,7 +20,8 @@ from onboard.model import Mode
 from onboard.resolve import resolve
 from onboard.service_reference import ServiceReference
 from tests import adversary
-from tests.adversary import EXTERNAL_ACCOUNT, ORG_ACCOUNT_ON_NO_LIST, Facts, Space, role
+from tests.adversary import (ANONYMOUS, EXTERNAL_ACCOUNT, ORG_ACCOUNT_ON_NO_LIST, STANDALONE_ACCOUNT, Facts, Space,
+                             role)
 from tests.athena_security_spec import ACCEPTED_RISKS, ACTION_REVIEW, BY_CONTROL, ROLE_CHANGES
 from tests.test_athena_journey import BASELINE_ALLOW, ORG, OTHER, PREVIEW, SNAPSHOT, load, run_tier
 
@@ -52,6 +53,8 @@ class Scenario:
                 if stmt["Effect"] == "Deny":
                     self.statements[stmt["Sid"]] = (policy_name.split("-")[0], stmt)
         self.allow = generated["policies"][f"scp-{FINDINGS['service']}-allow"]["Statement"][0]
+        self.endpoint = [p for n, p in generated["policies"].items() if n.startswith("vpce-")]
+        self.endpoint_allow = next((s for p in self.endpoint for s in p["Statement"] if s["Effect"] == "Allow"), None)
 
     def active(self):
         """Controls that must be preventive here, with the exceptions that apply to each."""
@@ -79,7 +82,7 @@ class Scenario:
     def decide(self, **overrides):
         point = adversary.default_point(self.facts, **overrides)
         scps, rcps = self.levels()
-        return adversary.decide(point, self.facts, scps, rcps)
+        return adversary.decide(point, self.facts, scps, rcps, self.endpoint)
 
 
 def build_scenarios():
@@ -138,6 +141,12 @@ class BoundedProofTest(AdversarialTestCase):
         for name, sc in self.scenarios.items():
             with self.subTest(scenario=name):
                 self.assertEqual(adversary.allow_list_counterexamples(sc.allow, sc.space), [])
+
+    def test_the_endpoint_policy_allows_everything_its_guardrails_do_not_deny(self):
+        for name, sc in self.scenarios.items():
+            with self.subTest(scenario=name):
+                self.assertIsNotNone(sc.endpoint_allow, "no endpoint policy generated")
+                self.assertEqual(adversary.endpoint_allow_counterexamples(sc.endpoint_allow, sc.space), [])
 
     def test_a_property_cannot_read_what_it_does_not_declare(self):
         sneaky = adversary.Property("ATH-C-04", "reads vpce undeclared", adversary.CONSTRAINS_PRINCIPALS,
@@ -266,6 +275,13 @@ class MutationTest(AdversarialTestCase):
         self.assertEqual(seen, set(EQUIVALENT_MUTANTS), "a listed equivalent mutant no longer occurs: drop it")
         self.assertEqual(caught, set(), "a listed equivalent mutant is caught now: drop it")
 
+    def test_every_endpoint_allow_mutant_is_caught(self):
+        sc = self.scenarios["hardened"]
+        self.assertIsNotNone(sc.endpoint_allow, "no endpoint policy generated")
+        for description, mutant in adversary.endpoint_allow_mutants(sc.endpoint_allow):
+            with self.subTest(mutant=description):
+                self.assertTrue(adversary.endpoint_allow_counterexamples(mutant, sc.space, limit=1))
+
     def test_every_allow_list_mutant_is_caught(self):
         sc = self.scenarios["hardened"]
         for description, mutant in adversary.allow_list_mutants(sc.allow):
@@ -281,6 +297,8 @@ class AcceptedRiskTest(AdversarialTestCase):
             overrides["principal"] = role(_account_of(sc.facts.break_glass[0]), "BreakGlass-Responder", ORG)
         elif overrides.get("principal") == "external":
             overrides["principal"] = role(EXTERNAL_ACCOUNT, "analyst", adversary.OTHER_ORG)
+        elif overrides.get("principal") == "anonymous":
+            overrides["principal"] = ANONYMOUS
         return overrides
 
     def test_register_entries_are_complete(self):
@@ -319,6 +337,8 @@ class AcceptedRiskTest(AdversarialTestCase):
 
 # --- Named attacks, end to end -------------------------------------------------------
 BREAK_GLASS_ROLE = f"arn:aws:iam::{PREVIEW}:role/BreakGlass-Responder"
+S3_ENDPOINT = "vpce-0example2222222222"
+TRUSTED_VENDOR = "123456789012"
 ATTACKS = (
     # (id, scenario, what the attacker does, request overrides, expected Sid)
     ("A01", "hardened", "a role outside the organization named BreakGlass-x reads an organization S3 object",
@@ -350,6 +370,23 @@ ATTACKS = (
     ("A15", "hardened", "a break-glass session copies data to an S3 bucket outside the organization",
      {"principal": role(PREVIEW, "BreakGlass-Responder", ORG), "action": "s3:PutObject",
       "resource_org": "o-otherorgid"}, "ORGC02"),
+    # Egress through the organization's own endpoints with someone else's credentials, or none.
+    ("A16", "hardened", "third-party credentials upload data to their own bucket through the organization's S3 "
+     "endpoint", {"principal": role(EXTERNAL_ACCOUNT, "exfil", "o-otherorgid"), "action": "s3:PutObject",
+                  "resource_org": "o-otherorgid", "resource_account": EXTERNAL_ACCOUNT, "vpce": S3_ENDPOINT},
+     "ORGC05"),
+    ("A17", "private-preview", "an unsigned request writes to a public third-party bucket through the endpoint",
+     {"principal": ANONYMOUS, "action": "s3:PutObject", "resource_org": None,
+      "resource_account": STANDALONE_ACCOUNT, "vpce": S3_ENDPOINT}, "ORGC05"),
+    ("A18", "hardened", "credentials from a standalone account (in no organization) use the endpoint",
+     {"principal": role(STANDALONE_ACCOUNT, "exfil", None), "action": "s3:PutObject", "resource_org": None,
+      "resource_account": STANDALONE_ACCOUNT, "vpce": S3_ENDPOINT}, "ORGC05"),
+    ("A19", "hardened", "an organization role writes table metadata into a third-party Glue catalog through the "
+     "endpoint", {"action": "glue:CreateTable", "resource_org": "o-otherorgid",
+                  "resource_account": EXTERNAL_ACCOUNT, "vpce": S3_ENDPOINT}, "ORGC06"),
+    ("A20", "hardened", "the same into a standalone account, where aws:ResourceOrgID is absent",
+     {"action": "glue:CreateTable", "resource_org": None, "resource_account": STANDALONE_ACCOUNT,
+      "vpce": S3_ENDPOINT}, "ORGC06"),
 )
 
 
@@ -359,6 +396,16 @@ class NamedAttackTest(AdversarialTestCase):
             with self.subTest(attack=aid, what=what):
                 decision = self.scenarios[scenario].decide(**overrides)
                 self.assertEqual((decision.allowed, decision.statement), (False, sid), decision.reason)
+
+    def test_named_trusted_accounts_stay_reachable_and_others_do_not(self):
+        vendor = {"action": "s3:GetObject", "resource_org": "o-otherorgid", "resource_account": TRUSTED_VENDOR,
+                  "vpce": S3_ENDPOINT}
+        for tier in ("contained", "hardened"):
+            with self.subTest(tier=tier):
+                self.assertTrue(self.scenarios[tier].decide(**vendor).allowed)
+        # Private Preview names no trusted account, so the vendor is outside the perimeter there.
+        decision = self.scenarios["private-preview"].decide(**vendor)
+        self.assertEqual((decision.allowed, decision.statement), (False, "ORGC02"))
 
     def test_legitimate_break_glass_still_works(self):
         sc = self.scenarios["hardened"]

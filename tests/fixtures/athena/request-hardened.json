@@ -7,6 +7,9 @@
     "vpc_endpoints": {
       "athena": [
         "vpce-0example1111111111"
+      ],
+      "s3": [
+        "vpce-0example2222222222"
       ]
     },
     "ous": [],
@@ -28,5 +31,8 @@
   },
   "target_scope": [
     "Workloads/Analytics"
+  ],
+  "trusted_resource_accounts": [
+    "123456789012"
   ]
 }

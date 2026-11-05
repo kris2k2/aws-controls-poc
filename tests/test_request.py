@@ -113,6 +113,13 @@ class ParseRequestTest(unittest.TestCase):
                 self.assertIn("break_glass_principals must be IAM role ARNs in a 12-digit account",
                               self.problems(preview_request(break_glass_principals=[bad])))
 
+    def test_trusted_resource_accounts_are_account_ids(self):
+        r = parse_request(preview_request(trusted_resource_accounts=["123456789012"]), today=TODAY)
+        self.assertEqual(r.trusted_resource_accounts, ("123456789012",))
+        self.assertEqual(parse_request(preview_request(), today=TODAY).trusted_resource_accounts, ())
+        self.assertIn("trusted_resource_accounts must be 12-digit AWS account IDs: *",
+                      self.problems(preview_request(trusted_resource_accounts=["*"])))
+
     def test_internal_restricted_is_the_moderate_default(self):
         r = parse_request(preview_request(data_classification="Internal Restricted"), today=TODAY)
         self.assertEqual((r.criticality, r.criticality_source), (Criticality.MODERATE, "default"))

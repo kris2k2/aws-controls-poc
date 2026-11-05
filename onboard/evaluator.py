@@ -8,6 +8,9 @@ against request vectors offline:
   every level from the root to the account (default deny with an allow-list).
 - RCPs: an explicit Deny at any level denies; RCPFullAWSAccess is implied.
   RCPs only apply to resources owned by accounts in the organization.
+- VPC endpoint policies: they apply to every request through the endpoint,
+  whoever makes it. An explicit Deny denies; otherwise an Allow must match.
+  The caller passes them only for requests that come through an endpoint.
 - Action, NotAction and Resource with * and ? wildcards (actions match
   case-insensitively).
 - Condition operators listed in `onboard.controls.CONDITION_OPERATORS`, with
@@ -108,11 +111,13 @@ def _statements(policies: list[dict]):
         yield from _list(policy.get("Statement", []))
 
 
-def evaluate(req: Request, scp_levels: list[list[dict]], rcp_levels: list[list[dict]] = ()) -> Decision:
-    """Decide whether organization policies permit the request.
+def evaluate(req: Request, scp_levels: list[list[dict]], rcp_levels: list[list[dict]] = (),
+             endpoint_policies: list[dict] = ()) -> Decision:
+    """Decide whether organization and endpoint policies permit the request.
 
     `scp_levels` and `rcp_levels` hold the policies attached at each level,
-    root first and account last.
+    root first and account last. `endpoint_policies` are the policies on the
+    VPC endpoint the request came through, if it came through one.
     """
     for level in scp_levels:
         for stmt in _statements(level):
@@ -123,6 +128,12 @@ def evaluate(req: Request, scp_levels: list[list[dict]], rcp_levels: list[list[d
             for stmt in _statements(level):
                 if stmt["Effect"] == "Deny" and statement_applies(stmt, req):
                     return Decision(False, "explicit deny in an RCP", stmt.get("Sid"))
+    for stmt in _statements(endpoint_policies):
+        if stmt["Effect"] == "Deny" and statement_applies(stmt, req):
+            return Decision(False, "explicit deny in a VPC endpoint policy", stmt.get("Sid"))
+    if endpoint_policies and not any(stmt["Effect"] == "Allow" and statement_applies(stmt, req)
+                                     for stmt in _statements(endpoint_policies)):
+        return Decision(False, "no VPC endpoint policy allows it")
     for depth, level in enumerate(scp_levels):
         if not any(stmt["Effect"] == "Allow" and statement_applies(stmt, req) for stmt in _statements(level)):
             return Decision(False, f"no SCP allows it at level {depth}")
