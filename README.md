@@ -18,7 +18,7 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 | Control model | Done: decision matrix, tier floors, escalation |
 | 1. Resolve | Partial: prefixes, actions by risk tier, resources, condition keys, SDK operations. Crosswalk, dependencies, availability and capability flags are still to do |
 | 2. Assess | Not started (the Athena test case uses hand-written findings) |
-| 3. Select | Done: tier scope, modes, retirement on promotion, registry reuse and escalation, checker items, next tier |
+| 3. Select | Done: tier scope, modes, retirement on promotion, registry reuse and escalation, checker items, next tier; every NIST SP 800-53 identifier resolved in the pinned OSCAL catalog |
 | 4. Generate | Partial: SCP and RCP guardrails and the allow-list; Config, CloudTrail and Sentinel are reported as pending |
 | 5. Compose · 6. Validate | Not started; a local SCP/RCP evaluator backs the Level 1 guardrail tests |
 
@@ -34,6 +34,7 @@ python3 -m onboard resolve request.json --out runs/bedrock
 python3 -m onboard resolve request.json --out runs/bedrock --snapshot snapshots/2026-10-30  # offline
 python3 -m onboard select request.json --findings findings.json --out runs/bedrock
 python3 -m onboard generate request.json --run runs/bedrock
+python3 -m onboard catalog --out catalogs/nist-sp-800-53-rev5.json  # refresh the pinned NIST catalog index
 ```
 
 A minimal request (synthetic values):

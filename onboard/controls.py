@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .catalog import CATALOG_ID, FRAMEWORK as NIST
 from .model import ControlClass, Severity, Tier
 
 FINDINGS_SCHEMA = "findings/v1"
@@ -105,6 +106,12 @@ def check_candidate(c: Any, where: str, problems: list[str]) -> None:
             problems.append(f"{where}.framework_refs[{i}].mapping_type must be one of {', '.join(MAPPING_TYPES)}")
         elif ref.get("verification") not in VERIFICATIONS:
             problems.append(f"{where}.framework_refs[{i}].verification must be one of {', '.join(VERIFICATIONS)}")
+        elif ref["framework"] == NIST and (not CATALOG_ID.match(ref["id"])
+                                           or not isinstance(ref.get("catalog_version"), str)):
+            # Catalog form (ac-3, ac-2.1) plus the catalog version, so Select can resolve it.
+            problems.append(f"{where}.framework_refs[{i}] needs a NIST catalog id (like ac-3) and catalog_version")
+    if refs and not any(isinstance(r, dict) and r.get("framework") == NIST for r in refs):
+        problems.append(f"{where}.framework_refs needs at least one {NIST} reference (the join key)")
 
     impls = c.get("implementations")
     if not isinstance(impls, dict) or set(impls) != set(PLATFORMS):

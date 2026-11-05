@@ -3,6 +3,7 @@ import json
 import unittest
 from pathlib import Path
 
+from onboard.catalog import load_index
 from onboard.controls import FindingsError, load_findings
 from onboard.evaluator import Request, evaluate, statement_applies
 from onboard.generate import GenerateError, generate
@@ -10,6 +11,7 @@ from onboard.request import parse_request
 from onboard.select import SelectError, select
 
 FIXTURES = Path(__file__).parent / "fixtures" / "athena"
+CATALOG = load_index()
 
 
 def athena(name):
@@ -114,10 +116,10 @@ class SelectTest(unittest.TestCase):
 
     def test_missing_decision_fails_closed(self):
         with self.assertRaisesRegex(SelectError, "needs the decision 'network_perimeter'"):
-            select(self.findings, request(decisions=None))
+            select(self.findings, request(decisions=None), CATALOG)
 
     def test_decision_can_exclude_a_control(self):
-        sel = select(self.findings, request(decisions={"network_perimeter": "not-applicable"}))["selection"]
+        sel = select(self.findings, request(decisions={"network_perimeter": "not-applicable"}), CATALOG)["selection"]
         self.assertNotIn("ATH-C-04", sel["controls"])
         self.assertEqual(sel["excluded_by_decision"],
                          [{"control_id": "ATH-C-04", "reason": "decision network_perimeter = not-applicable"}])
@@ -128,7 +130,7 @@ class SelectTest(unittest.TestCase):
         data["control_registry"] = {"controls": {"ORG-S-01": {
             "mode_by_criticality": {"Low": "Enforce", "Moderate": "Enforce", "High": "Enforce"},
             "services": ["s3"]}}}
-        result = select(self.findings, parse_request(data))
+        result = select(self.findings, parse_request(data), CATALOG)
         entry = result["registry"]["controls"]["ORG-S-01"]
         self.assertEqual(entry["mode_by_criticality"]["Low"], "Enforce")  # matrix alone says Enforce with override
         self.assertEqual(entry["services"], ["athena", "s3"])
@@ -144,13 +146,13 @@ class GenerateTest(unittest.TestCase):
         org = athena("request-private-preview.json")["org_state"]
         org = {k: v for k, v in org.items() if k != "vpc_endpoints"}
         req = request(org_state=org)
-        controls = select(self.findings, req)["controls"]
+        controls = select(self.findings, req, CATALOG)["controls"]
         with self.assertRaisesRegex(GenerateError, "ATH-C-04 needs the parameter 'vpce_ids'"):
             generate(self.findings, controls, req)
 
     def test_no_break_glass_means_no_exemption(self):
         req = request(break_glass_principals=None)
-        controls = select(self.findings, req)["controls"]
+        controls = select(self.findings, req, CATALOG)["controls"]
         policy = generate(self.findings, controls, req)["policies"]["scp-athena-guardrails"]
         self.assertTrue(all("ArnNotLike" not in s.get("Condition", {}) for s in policy["Statement"]))
 

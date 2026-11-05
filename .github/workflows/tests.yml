@@ -2,10 +2,10 @@ name: tests
 
 on:
   pull_request:
-    paths: ["onboard/**", "tests/**", "pyproject.toml", ".github/workflows/tests.yml"]
+    paths: ["onboard/**", "tests/**", "catalogs/**", "pyproject.toml", ".github/workflows/tests.yml"]
   push:
     branches: [main]
-    paths: ["onboard/**", "tests/**", "pyproject.toml", ".github/workflows/tests.yml"]
+    paths: ["onboard/**", "tests/**", "catalogs/**", "pyproject.toml", ".github/workflows/tests.yml"]
   workflow_dispatch:
 
 permissions:

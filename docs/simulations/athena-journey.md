@@ -17,8 +17,10 @@ the spec's `report.md` layout where they apply.
 output, pinned by the tests. The candidate controls are not: Assess isn't
 built, so an analyst wrote them. In `findings.json`, each fact marked
 `verified` was checked against the cited AWS page on 2026-10-30. Every
-framework mapping is `inferred`, and the spec's independent verification
-pass has not run. Guardrail behaviour is tested with the local evaluator;
+NIST SP 800-53 mapping is `inferred`, and the spec's independent verification
+pass has not run. Each 800-53 identifier is checked to exist, and not be
+withdrawn, in the pinned OSCAL catalog (5.2.0); whether it fits the control
+is still the analyst's call. Guardrail behaviour is tested with the local evaluator;
 the spec's calibration against the IAM policy simulator and live calls has
 not run either.
 
@@ -140,7 +142,9 @@ ATH-H-06 becomes Enforce with override:
 - No control's mode drops on promotion, at any criticality.
 - Containment is Enforce at every tier and every criticality.
 - Every control declares a detective platform and maps to at least one NIST
-  SP 800-53 r5 control (the reconciliation gate).
+  SP 800-53 Rev 5 control that exists, not withdrawn, in the pinned OSCAL
+  catalog (the reconciliation gate). Each selection records the catalog
+  version and the source file's hash.
 - Every Athena action named in a guardrail exists in the pinned API contract
   (the action validity gate).
 - Every policy is under the 5,120-character limit. Every deny statement's
