@@ -100,9 +100,10 @@ Tested outcomes, all through the evaluator:
     role's trust policy (ORGC04).
 - Calls made through an AWS service (`aws:ViaAWSService`) pass the network
   perimeter, and global services pass the region policy.
-- Break-glass is exempt from every one of these denies. Break-glass
-  principals are role ARNs in named accounts (`111122223333` and
-  `444455556666`), never a wildcard account.
+- Break-glass is exempt from every one of these denies except the data
+  perimeter (ORGC02, ORGC03): a break-glass session can't move data out of
+  the organization either. Break-glass principals are role ARNs in named
+  accounts (`111122223333` and `444455556666`), never a wildcard account.
 
 The `next_tier` section of `selection.json` previews Contained: it adds 8
 supervision controls and retires ATH-C-01.
@@ -192,16 +193,22 @@ what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification
    that adds an action fails until it is reviewed.
 5. **Exemption hygiene:** exemptions name a role in a 12-digit account, and
    every exempt role is protected by ORG-C-04 from everyone else.
-6. **Mutation testing:** 705 mutants of the generated statements (dropped or
+6. **Mutation testing:** 657 mutants of the generated statements (dropped or
    narrowed actions, dropped or negated conditions, widened exemptions and
-   resources) are all caught, except 5 classes that are equivalent in the
+   resources) are all caught, except 4 kinds that are equivalent in the
    model and listed with the reason.
-7. **Accepted risks:** the gaps left open on purpose (calls through AWS
-   services skip the endpoint check, Spark workgroups can be created, global
-   services ignore the region policy, break-glass is exempt), each pinned by a
-   request that must stay allowed. Their sign-off is pending.
+7. **Accepted risks:** the gaps left open on purpose, each with its reach,
+   pinned by a request that must stay allowed and by boundary requests that
+   must stay denied. Their sign-off is pending.
 
-A catalogue of 14 named attacks runs end to end through every policy.
+   | Risk | Who can use it, from where | Boundary pinned |
+   |---|---|---|
+   | AR-01: calls through an AWS service skip the VPC endpoint check | Organization principals, from any network (a stolen credential works from outside) | The data perimeter still holds on that path (ORGC02, ORGC03) |
+   | AR-02: Spark-engine workgroups can be created | Organization principals; contained | Sessions and calculations stay denied (ATHC03) |
+   | AR-03: global services aren't region-restricted | Organization principals, not contained to the allowed regions (CloudFront caches worldwide); only the global services the allow-list opens | Regional services stay region-restricted (ORGC01) |
+   | AR-04: break-glass is exempt from every guardrail but the data perimeter | Whoever the break-glass roles' trust policies admit, which the tool doesn't check | Break-glass can't move data out of the organization (ORGC02) |
+
+A catalogue of 15 named attacks runs end to end through every policy.
 
 When it was first run, the suite found three gaps, now fixed (F12, F13):
 the break-glass pattern `arn:aws:iam::*:role/BreakGlass-*` let a role of that
@@ -226,6 +233,7 @@ missed `UpdateNotebook` and `UpdateNotebookMetadata`.
 | F11 | Most supervision controls are Enforce with override with no guardrail. "Override" then only means the Sentinel soft-mandatory path. | Open | Confirm this is the intended meaning for configuration controls. |
 | F12 | **Break-glass exemptions could be matched or created by an attacker.** A wildcard account matched roles outside the organization (RCP bypass), and nothing stopped a member creating a `BreakGlass-*` role. | Fixed | Break-glass and exception principals must be role ARNs in a 12-digit account. New shared control ORG-C-04 denies the IAM role changes (and `iam:PassRole`) on every exempt role to everyone but break-glass. |
 | F13 | **ATH-C-03's deny list was hand-picked** and missed two Spark actions. | Fixed | Every capability action in the contract is classified in `action-review.json` (pending security review); the guardrail denies the reviewed list. |
+| F14 | **Break-glass could move data out of the organization**: it was exempt from the S3 resource perimeter (ORG-C-02). Its reach is set by trust policies the tool doesn't check. | Fixed, pending sign-off | Guardrails can set `break_glass_exempt: false`; the data perimeter (ORG-C-02, ORG-C-03) does. Checking break-glass trust policies is open. |
 
 ## 7. Not done yet
 
