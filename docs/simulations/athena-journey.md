@@ -8,7 +8,7 @@ the spec's `report.md` layout where they apply.
 |---|---|
 | Date | 2026-10-30 |
 | Requests | `tests/fixtures/athena/request-{private-preview,contained,hardened}.json` (synthetic org `o-exampleorgid`, preview account `111122223333`, data classification Internal Restricted, criticality Moderate) |
-| Candidate controls | `tests/fixtures/athena/findings.json`: 22 candidates, hand-written in place of Assess |
+| Candidate controls | `tests/fixtures/athena/findings.json`: 24 candidates, hand-written in place of Assess |
 | API contract | AWS service reference snapshot, `tests/fixtures/service-reference/2026-10-30/` |
 | Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_adversarial.py` (guardrails against an attacker, see [section 5](#5-adversarial-verification)), `tests/test_athena_acceptance.py` (Resolve) |
 | Run it | see [Reproduce](#reproduce) |
@@ -29,9 +29,9 @@ either.
 
 | Tier | Controls | Modes | Guardrails generated | Checker items |
 |---|---|---|---|---|
-| Private Preview | 8: 8 containment | Enforce 8 | 7 SCP statements, 1 RCP statement | 15 |
-| Contained (promotion) | 15: 7 containment, 8 supervision; ATH-C-01 retired | Enforce 10, Enforce with override 5 | 8 SCP, 1 RCP | 23 |
-| Hardened (promotion) | 21: adds 6 hardening | Enforce 10, Enforce with override 5, Advise 5, Report 1 | 8 SCP, 1 RCP | 23 |
+| Private Preview | 10: 10 containment | Enforce 10 | 7 SCP statements, 1 RCP statement, 2 endpoint policy statements | 19 |
+| Contained (promotion) | 17: 9 containment, 8 supervision; ATH-C-01 retired | Enforce 12, Enforce with override 5 | 8 SCP, 1 RCP, 2 endpoint | 27 |
+| Hardened (promotion) | 23: adds 6 hardening | Enforce 12, Enforce with override 5, Advise 5, Report 1 | 8 SCP, 1 RCP, 2 endpoint | 27 |
 
 Each promotion runs as a `diff` with the registry the previous tier wrote. The
 shared `ORG-*` controls are added once and then reused; none is duplicated
@@ -47,9 +47,11 @@ Their generators aren't built yet, so they show as `pending` in
 | Control | What | Class | Severity | Private Preview | Contained | Hardened | Detective |
 |---|---|---|---|---|---|---|---|
 | ORG-C-01 | Requests only in allowed regions | Containment | High (rubric) | Enforce (SCP) | Enforce (SCP) | Enforce (SCP) | config, cloudtrail |
-| ORG-C-02 | Organization principals reach only organization S3 resources | Containment | High (rubric) | Enforce (SCP) | Enforce (SCP) | Enforce (SCP) | cloudtrail |
+| ORG-C-02 | Organization principals reach only organization S3 resources and named trusted accounts | Containment | High (rubric) | Enforce (SCP) | Enforce (SCP) | Enforce (SCP) | cloudtrail |
 | ORG-C-03 | Only organization principals reach S3 and KMS resources | Containment | Critical (rubric) | Enforce (RCP) | Enforce (RCP) | Enforce (RCP) | config, cloudtrail |
 | ORG-C-04 | Only break-glass principals change or pass break-glass and exception roles | Containment | Critical (rubric) | Enforce (SCP) | Enforce (SCP) | Enforce (SCP) | cloudtrail |
+| ORG-C-05 | Only organization principals use the organization's VPC endpoints | Containment | Critical (rubric) | Enforce (endpoint) | Enforce (endpoint) | Enforce (endpoint) | config, cloudtrail |
+| ORG-C-06 | The organization's VPC endpoints reach only organization resources and named trusted accounts | Containment | Critical (rubric) | Enforce (endpoint) | Enforce (endpoint) | Enforce (endpoint) | config, cloudtrail |
 | ATH-C-01 | Athena only in the authorized preview accounts | Containment | High (rubric) | Enforce (SCP) | retired | retired | cloudtrail |
 | ATH-C-02 | No federated or cross-account data catalogs | Containment | High (rubric) | Enforce (SCP) | Enforce (SCP) | Enforce (SCP) | config, cloudtrail |
 | ATH-C-03 | No Spark notebooks or sessions | Containment | High (rubric) | Enforce (SCP) | Enforce (SCP) | Enforce (SCP) | cloudtrail |
@@ -73,13 +75,15 @@ Their generators aren't built yet, so they show as `pending` in
 
 ### Private Preview: containment only
 
-Eight controls, all **Enforce**, because containment is never permissive.
+Ten controls, all **Enforce**, because containment is never permissive.
 Four belong to Athena: preview accounts only, no federated or cross-account
 data catalogs, no Spark notebooks or sessions, and VPC-endpoint-only access.
-Four are shared organization controls: the region policy, the S3 resource
-perimeter, the S3/KMS identity perimeter, and ORG-C-04, which stops anyone
+Six are shared organization controls: the region policy, the S3 resource
+perimeter, the S3/KMS identity perimeter, ORG-C-04, which stops anyone
 but break-glass creating, changing or passing the roles the guardrails
-exempt (break-glass and exception roles). Athena's own resources aren't
+exempt (break-glass and exception roles), and the network perimeter
+(ORG-C-05, ORG-C-06): one baseline policy on every VPC endpoint the
+organization runs ([ADR-0004](../adr/0004-baseline-vpc-endpoint-policy.md)). Athena's own resources aren't
 RCP-supported, so its identity perimeter is the S3 and KMS resources it reads
 and writes (verified, F5).
 
@@ -97,7 +101,12 @@ Tested outcomes, all through the evaluator:
   - reads of an organization bucket by an outside principal, even one
     whose role is named like break-glass (ORGC03);
   - creating a role with a break-glass name, or rewriting a break-glass
-    role's trust policy (ORGC04).
+    role's trust policy (ORGC04);
+  - any call through the organization's endpoints with credentials from
+    outside the organization, or none (ORGC05);
+  - any call through those endpoints to a resource outside the organization,
+    such as a third-party Glue catalog, unless its account is named in
+    `trusted_resource_accounts` (ORGC06).
 - Calls made through an AWS service (`aws:ViaAWSService`) pass the network
   perimeter, and global services pass the region policy.
 - Break-glass is exempt from every one of these denies except the data
@@ -179,9 +188,11 @@ what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification
 2. **Attacker model** (`tests/adversary.py`): the action (all 81 Athena
    actions in the contract, plus dependencies, global services and one
    service nothing allows, in any case), the resource, the principal (role
-   name and path, account inside or outside the organization, AWS service),
-   the region, the VPC endpoint (including the attacker's own), calls through
-   an AWS service, the resource owner and request tags.
+   name and path, account inside or outside the organization, a standalone
+   account in no organization, an unsigned request, AWS service), the region,
+   the VPC endpoint (each of the organization's, the attacker's own, or
+   none), calls through an AWS service, the organization and account owning
+   the resource, and request tags.
 3. **Bounded proof:** for each tier, plus High criticality with an
    exception, every generated statement denies exactly what its property
    denies, over every combination of the dimensions either side reads. Actions
@@ -193,10 +204,11 @@ what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification
    that adds an action fails until it is reviewed.
 5. **Exemption hygiene:** exemptions name a role in a 12-digit account, and
    every exempt role is protected by ORG-C-04 from everyone else.
-6. **Mutation testing:** 657 mutants of the generated statements (dropped or
+6. **Mutation testing:** 709 mutants of the generated statements (dropped or
    narrowed actions, dropped or negated conditions, widened exemptions and
    resources) are all caught, except 4 kinds that are equivalent in the
-   model and listed with the reason.
+   model and listed with the reason. The endpoint policy's base allow is
+   checked to allow everything its guardrails don't deny.
 7. **Accepted risks:** the gaps left open on purpose, each with its reach,
    pinned by a request that must stay allowed and by boundary requests that
    must stay denied. Their sign-off is pending.
@@ -207,8 +219,11 @@ what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification
    | AR-02: Spark-engine workgroups can be created | Organization principals; contained | Sessions and calculations stay denied (ATHC03) |
    | AR-03: global services aren't region-restricted | Organization principals, not contained to the allowed regions (CloudFront caches worldwide); only the global services the allow-list opens | Regional services stay region-restricted (ORGC01) |
    | AR-04: break-glass is exempt from every guardrail but the data perimeter | Whoever the break-glass roles' trust policies admit, which the tool doesn't check | Break-glass can't move data out of the organization (ORGC02) |
+   | AR-05: traffic that bypasses the organization's endpoints | Anyone with a path around them (NAT or internet gateway, proxy, off-network device) and outside credentials, or none | The same request through an endpoint stays denied (ORGC05) |
 
-A catalogue of 15 named attacks runs end to end through every policy.
+A catalogue of 20 named attacks runs end to end through every policy,
+including egress through the organization's own endpoints with someone
+else's credentials, unsigned requests, and standalone accounts (A16 to A20).
 
 When it was first run, the suite found three gaps, now fixed (F12, F13):
 the break-glass pattern `arn:aws:iam::*:role/BreakGlass-*` let a role of that
@@ -234,6 +249,7 @@ missed `UpdateNotebook` and `UpdateNotebookMetadata`.
 | F12 | **Break-glass exemptions could be matched or created by an attacker.** A wildcard account matched roles outside the organization (RCP bypass), and nothing stopped a member creating a `BreakGlass-*` role. | Fixed | Break-glass and exception principals must be role ARNs in a 12-digit account. New shared control ORG-C-04 denies the IAM role changes (and `iam:PassRole`) on every exempt role to everyone but break-glass. |
 | F13 | **ATH-C-03's deny list was hand-picked** and missed two Spark actions. | Fixed | Every capability action in the contract is classified in `action-review.json` (pending security review); the guardrail denies the reviewed list. |
 | F14 | **Break-glass could move data out of the organization**: it was exempt from the S3 resource perimeter (ORG-C-02). Its reach is set by trust policies the tool doesn't check. | Fixed, pending sign-off | Guardrails can set `break_glass_exempt: false`; the data perimeter (ORG-C-02, ORG-C-03) does. Checking break-glass trust policies is open. |
+| F15 | **The organization's VPC endpoints let data leave with someone else's credentials.** No SCP or RCP applies to an outside principal writing to an outside resource, and the endpoints carried AWS's default full-access policy. | Fixed for traffic through the endpoints | A baseline endpoint policy (ORG-C-05, ORG-C-06) on every endpoint; named exceptions in `trusted_resource_accounts`. Traffic around the endpoints is AR-05: a network control. |
 
 ## 7. Not done yet
 
@@ -247,6 +263,9 @@ missed `UpdateNotebook` and `UpdateNotebookMetadata`.
 - **Validate:** gates are asserted in tests, but `validation.json`,
   `report.md`, approvals and the manifest aren't produced.
 - **Level 2 end-state tests:** no disposable test account yet.
+- **Network egress:** traffic that bypasses the endpoints (AR-05) needs
+  network controls (no internet egress from workload VPCs, egress
+  filtering); this tool writes no network configuration.
 - **Evaluator calibration:** the adversarial proof holds in the local
   evaluator's model of IAM. Replaying the same requests through the IAM policy
   simulator and live calls in a sandbox account is what turns it into a claim

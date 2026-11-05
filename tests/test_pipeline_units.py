@@ -78,6 +78,21 @@ class EvaluatorTest(unittest.TestCase):
         self.assertFalse(evaluate(inside, [[ALLOW_ALL]], [[rcp]]).allowed)
         self.assertTrue(evaluate(outside, [[ALLOW_ALL]], [[rcp]]).allowed)
 
+    def test_endpoint_policies_bind_every_caller_through_the_endpoint(self):
+        endpoint = {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*"},
+                                  deny({"StringNotEqualsIfExists": {"aws:PrincipalOrgID": "o-exampleorgid"}},
+                                       Principal="*", Sid="E")]}
+        outsider = Request("s3:PutObject", "arn:aws:iam::999988887777:role/x", "999988887777", "ca-central-1",
+                           context={"aws:PrincipalOrgID": "o-otherorgid"}, resource_in_org=False)
+        self.assertEqual(evaluate(outsider, [], [], [endpoint]).statement, "E")  # no SCP applies to it
+        self.assertTrue(evaluate(outsider, [], []).allowed)                     # not through the endpoint
+        member = Request("s3:PutObject", "arn:aws:iam::111122223333:role/x", "111122223333", "ca-central-1",
+                         context={"aws:PrincipalOrgID": "o-exampleorgid"})
+        self.assertTrue(evaluate(member, [[ALLOW_ALL]], [], [endpoint]).allowed)
+        only_s3 = {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:*", "Resource": "*"}]}
+        decision = evaluate(r("athena:GetWorkGroup"), [[ALLOW_ALL]], [], [only_s3])
+        self.assertEqual((decision.allowed, decision.reason), (False, "no VPC endpoint policy allows it"))
+
 
 class FindingsTest(unittest.TestCase):
     def setUp(self):
@@ -114,6 +129,11 @@ class FindingsTest(unittest.TestCase):
         cand = next(c for c in self.findings["candidates"] if c["control_id"] == "ORG-C-02")
         cand["guardrail"]["break_glass_exempt"] = "no"
         self.assertIn("guardrail.break_glass_exempt must be true or false", self.problems(self.findings))
+
+    def test_optional_parameters_must_be_a_list(self):
+        cand = next(c for c in self.findings["candidates"] if c["control_id"] == "ORG-C-06")
+        cand["guardrail"]["optional_parameters"] = "trusted_resource_accounts"
+        self.assertIn("guardrail.optional_parameters must be a list", self.problems(self.findings))
 
     def test_not_planned_needs_a_reason(self):
         self.findings["candidates"][0]["implementations"]["boundary"] = {"status": "not_applicable"}
@@ -185,6 +205,23 @@ class GenerateTest(unittest.TestCase):
         for sid in ("ORGC02", "ORGC03"):
             self.assertNotIn("ArnNotLike", stmts[sid].get("Condition", {}), sid)
         self.assertIn("ArnNotLike", stmts["ORGC01"]["Condition"])  # other guardrails keep break-glass
+
+    def test_the_endpoint_policy_allows_first_then_denies_and_names_its_endpoints(self):
+        req = request()
+        result = generate(self.findings, select(self.findings, req, CATALOG)["controls"], req)
+        policy = result["policies"]["vpce-org-guardrails"]
+        self.assertEqual([s["Sid"] for s in policy["Statement"]], ["AllowUnlessDenied", "ORGC05", "ORGC06"])
+        self.assertTrue(all(s["Principal"] == "*" for s in policy["Statement"]))
+        self.assertEqual(result["report"]["vpc_endpoints"], ["vpce-0example1111111111", "vpce-0example2222222222"])
+
+    def test_an_empty_optional_parameter_drops_its_condition(self):
+        def org_c_06(**overrides):
+            req = request(**overrides)
+            policies = generate(self.findings, select(self.findings, req, CATALOG)["controls"], req)["policies"]
+            return next(s for s in policies["vpce-org-guardrails"]["Statement"] if s["Sid"] == "ORGC06")
+        self.assertEqual(org_c_06()["Condition"], {"StringNotEqualsIfExists": {"aws:ResourceOrgID": "o-exampleorgid"}})
+        self.assertEqual(org_c_06(trusted_resource_accounts=["123456789012"])["Condition"]["StringNotEqualsIfExists"],
+                         {"aws:ResourceOrgID": "o-exampleorgid", "aws:ResourceAccount": "123456789012"})
 
     def test_nothing_to_protect_means_no_protection_statement(self):
         req = request(break_glass_principals=None)

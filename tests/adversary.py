@@ -8,9 +8,10 @@ of. This module checks it against the requests an attacker can make instead:
   `tests/athena_security_spec.py`, the file the security team reviews.
 - The attacker model (`Space`) lists what a request can vary: the action, the
   resource, the principal (role name, path and account, inside or outside the
-  organization, or an AWS service), the region, the VPC endpoint (including
-  one the attacker created), whether an AWS service makes the call, the owner
-  of the resource, and request tags. Each dimension takes every value the
+  organization, a standalone account in no organization, anonymous, or an AWS
+  service), the region, the VPC endpoint (the organization's own, one the
+  attacker created, or none), whether an AWS service makes the call, the
+  organization and account owning the resource, and request tags. Each dimension takes every value the
   request names, plus values it names nowhere.
 - `counterexamples` checks one generated statement against its property over
   every combination of the dimensions either of them reads. A statement can
@@ -22,8 +23,11 @@ of. This module checks it against the requests an attacker can make instead:
   sample: a statement passes only if it denies exactly what its property
   denies, no more (collateral damage) and no less (a bypass).
 - Whole-policy decisions are deny-overrides over statements plus the
-  allow-list, so per-statement equivalence plus allow-list equivalence gives
-  equivalence of the whole decision, under the same SCP and RCP scoping.
+  allow-lists (the SCP allow-list and the endpoint policy's base allow), so
+  per-statement equivalence plus allow-list equivalence gives equivalence of
+  the whole decision, under the same scoping: SCPs bind organization
+  principals, RCPs organization resources, endpoint policies every request
+  through the organization's endpoints.
 - `mutants` breaks a statement the ways a generator bug would; the tests
   require every mutant to produce a counterexample, which shows the check
   has teeth.
@@ -48,6 +52,7 @@ from onboard.evaluator import Decision, Request, evaluate, statement_applies
 # Values the request names nowhere. Synthetic, from the AWS documentation ranges.
 ORG_ACCOUNT_ON_NO_LIST = "777788889999"   # in the organization, on no list in the request
 EXTERNAL_ACCOUNT = "999988887777"         # outside the organization
+STANDALONE_ACCOUNT = "210987654321"       # outside any organization: no aws:PrincipalOrgID or aws:ResourceOrgID
 OTHER_ORG = "o-otherorgid"
 ATTACKER_VPCE = "vpce-0attacker000000000"
 REGIONS_NAMED_NOWHERE = ("us-east-1", "us-west-2")
@@ -66,7 +71,8 @@ EXTRA_ACTIONS = (
 
 CONSTRAINS_PRINCIPALS = "organization principals"  # enforceable with an SCP
 CONSTRAINS_RESOURCES = "organization resources"    # enforceable with an RCP
-POLICY_TYPE = {CONSTRAINS_PRINCIPALS: "scp", CONSTRAINS_RESOURCES: "rcp"}
+CONSTRAINS_ENDPOINTS = "requests through organization endpoints"  # enforceable with an endpoint policy
+POLICY_TYPE = {CONSTRAINS_PRINCIPALS: "scp", CONSTRAINS_RESOURCES: "rcp", CONSTRAINS_ENDPOINTS: "vpce"}
 
 # Which dimension sets each request-context key (lower case). A statement that
 # reads a key missing here fails the check: extend the model first.
@@ -79,9 +85,10 @@ KEY_DIMENSION = {
     "aws:sourcevpce": "vpce",
     "aws:viaawsservice": "via",
     "aws:resourceorgid": "resource_org",
+    "aws:resourceaccount": "resource_account",
     "aws:requesttag/cost-center": "tag",
 }
-DIMENSIONS = ("principal", "region", "vpce", "via", "resource_org", "tag")
+DIMENSIONS = ("principal", "region", "vpce", "via", "resource_org", "resource_account", "tag")
 
 
 @functools.lru_cache(maxsize=4096)
@@ -117,6 +124,7 @@ def role(account: str, name: str, org_id: str | None) -> Principal:
 
 
 AWS_SERVICE = Principal("AWS service principal", None, None, None, service=True)
+ANONYMOUS = Principal("anonymous (unsigned request)", None, None, None)
 
 
 def sample(pattern: str) -> list[str]:
@@ -135,6 +143,8 @@ class Facts:
     allowed_regions: tuple[str, ...]
     preview_accounts: tuple[str, ...]
     vpce_ids: tuple[str, ...]
+    endpoints: tuple[str, ...]          # every VPC endpoint the organization runs, any service
+    trusted_resource_accounts: tuple[str, ...]
     break_glass: tuple[str, ...]
     exception_principals: tuple[str, ...]
     allow_prefixes: tuple[str, ...]
@@ -153,6 +163,8 @@ class Facts:
             allowed_regions=tuple(request.allowed_regions),
             preview_accounts=tuple(request.preview_accounts),
             vpce_ids=tuple((org.get("vpc_endpoints") or {}).get(service, [])),
+            endpoints=tuple(sorted({e for ids in (org.get("vpc_endpoints") or {}).values() for e in ids})),
+            trusted_resource_accounts=tuple(request.trusted_resource_accounts),
             break_glass=tuple(request.break_glass_principals),
             exception_principals=tuple(e.principal for e in request.exceptions),
             allow_prefixes=tuple([service] + sorted({d["prefix"] for d in findings.get("dependencies", [])})),
@@ -179,13 +191,15 @@ class Space:
                               | {ORG_ACCOUNT_ON_NO_LIST})
         principals = [role(a, n, org) for a in org_accounts for n in names]
         principals += [role(EXTERNAL_ACCOUNT, n, OTHER_ORG) for n in names]
-        principals += [AWS_SERVICE, *extra_principals]
+        principals += [role(STANDALONE_ACCOUNT, "analyst", None), ANONYMOUS, AWS_SERVICE, *extra_principals]
         self.values = {
             "principal": principals,
             "region": list(facts.allowed_regions) + [r for r in REGIONS_NAMED_NOWHERE if r not in facts.allowed_regions],
-            "vpce": list(facts.vpce_ids) + [ATTACKER_VPCE, None],
+            "vpce": list(facts.endpoints) + [ATTACKER_VPCE, None],
             "via": [False, True],
             "resource_org": [org, OTHER_ORG, None],
+            "resource_account": sorted(set(facts.trusted_resource_accounts) | {org_accounts[0], EXTERNAL_ACCOUNT,
+                                                                                STANDALONE_ACCOUNT}) + [None],
             "tag": [TAG_VALUE, None],
         }
         actions = list(contract_actions) + list(EXTRA_ACTIONS) + list(extra_actions)
@@ -265,7 +279,18 @@ def _in_scope(patterns: tuple[list, list, list], action: str, resource: str) -> 
     return any(matches(p, resource) for p in resources)
 
 
+def in_domain(prop: Property, point: dict, facts: Facts) -> bool:
+    """Whether the kind of policy that enforces the property sees the request at all."""
+    if prop.constrains == CONSTRAINS_PRINCIPALS:
+        return point["principal"].in_org
+    if prop.constrains == CONSTRAINS_RESOURCES:
+        return point.get("resource_org") == facts.org_id
+    return point.get("vpce") in facts.endpoints and not point["principal"].service
+
+
 def property_denies(prop: Property, point: dict, facts: Facts, exceptions: tuple[str, ...]) -> bool:
+    if not in_domain(prop, point, facts):
+        return False
     if not _in_scope(prop.patterns(facts), point["action"], point["resource"]):
         return False
     if trusted(point["principal"], facts, exceptions, prop.break_glass_exempt):
@@ -281,6 +306,7 @@ def to_request(point: dict, facts: Facts) -> Request:
     if p.org_id:
         ctx["aws:PrincipalOrgID"] = p.org_id
     optional = {"aws:SourceVpce": point.get("vpce"), "aws:ResourceOrgID": point.get("resource_org"),
+                "aws:ResourceAccount": point.get("resource_account"),
                 "aws:RequestTag/cost-center": point.get("tag")}
     ctx.update({k: v for k, v in optional.items() if v is not None})
     return Request(action=point["action"], principal_arn=p.arn, principal_account=p.account,
@@ -294,7 +320,7 @@ def default_point(facts: Facts, **overrides) -> dict:
     point = {"principal": role(account, "analyst", facts.org_id), "action": f"{facts.service}:GetWorkGroup",
              "resource": f"arn:aws:athena:{facts.allowed_regions[0]}:{account}:workgroup/primary",
              "region": facts.allowed_regions[0], "vpce": (facts.vpce_ids or (None,))[0], "via": False,
-             "resource_org": facts.org_id, "tag": None}
+             "resource_org": facts.org_id, "resource_account": account, "tag": None}
     point.update(overrides)
     return point
 
@@ -333,12 +359,17 @@ def counterexamples(stmt: dict | None, prop: Property, space: Space, exceptions:
     unconditional = {k: v for k, v in stmt.items() if k != "Condition"} if stmt else None
     neutral = default_point(facts)
 
-    dims = sorted(({"principal"} | statement_dimensions(stmt) | set(prop.reads)) & set(DIMENSIONS))
-    values = {d: space.values[d] for d in dims}
+    dims = {"principal"} | statement_dimensions(stmt) | set(prop.reads)
+    if prop.constrains == CONSTRAINS_ENDPOINTS:
+        dims.add("vpce")
+    values = {d: space.values[d] for d in sorted(dims & set(DIMENSIONS))}
     if prop.constrains == CONSTRAINS_PRINCIPALS:  # SCPs govern organization principals only
         values["principal"] = [p for p in values["principal"] if p.in_org]
-    else:                                          # RCPs govern organization resources only
+    elif prop.constrains == CONSTRAINS_RESOURCES:  # RCPs govern organization resources only
         values["resource_org"] = [facts.org_id]
+    else:  # endpoint policies govern every caller that comes through the organization's endpoints
+        values["vpce"] = list(facts.endpoints)
+        values["principal"] = [p for p in values["principal"] if not p.service]
     found = []
     names = list(values)
     pairs = [(a, r) for a in actions for r in resources
@@ -377,10 +408,28 @@ def describe(point: dict) -> dict:
     return out
 
 
-def decide(point: dict, facts: Facts, scp_levels: list, rcp_levels: list) -> Decision:
-    """The whole decision for one request: SCPs bind organization principals, RCPs organization resources."""
+def decide(point: dict, facts: Facts, scp_levels: list, rcp_levels: list, endpoint_policies=()) -> Decision:
+    """The whole decision for one request: SCPs bind organization principals, RCPs organization resources,
+    endpoint policies whoever comes through one of the organization's endpoints."""
     principal: Principal = point["principal"]
-    return evaluate(to_request(point, facts), scp_levels if principal.in_org else [], rcp_levels)
+    through_endpoint = point.get("vpce") in facts.endpoints
+    return evaluate(to_request(point, facts), scp_levels if principal.in_org else [], rcp_levels,
+                    endpoint_policies if through_endpoint else ())
+
+
+def endpoint_allow_counterexamples(allow_stmt: dict, space: Space, limit: int = 5) -> list[str]:
+    """Actions the endpoint policy's base allow doesn't allow. It must allow everything and leave the denying
+    to the guardrails, or it breaks traffic nobody decided to break."""
+    found = []
+    for principal in [p for p in space.values["principal"] if not p.service]:
+        for action in space.actions:
+            point = default_point(space.facts, principal=principal, action=action,
+                                  vpce=(space.facts.endpoints or (None,))[0])
+            if not statement_applies(allow_stmt, to_request(point, space.facts)):
+                found.append(f"{principal.label} {action}")
+                if len(found) >= limit:
+                    return found
+    return found
 
 
 # --- Mutation operators ---------------------------------------------------------------
@@ -475,6 +524,12 @@ def _replace_op(stmt: dict, op: str, key: str, new_op: str) -> dict:
         del m["Condition"][op]
     m["Condition"].setdefault(new_op, {})[key] = value
     return m
+
+
+def endpoint_allow_mutants(allow_stmt: dict):
+    yield "narrow the base allow to s3:*", {**allow_stmt, "Action": "s3:*"}
+    yield "limit the base allow to organization principals", {
+        **allow_stmt, "Condition": {"StringEquals": {"aws:PrincipalOrgID": "o-exampleorgid"}}}
 
 
 def allow_list_mutants(allow_stmt: dict):

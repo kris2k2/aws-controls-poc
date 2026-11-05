@@ -27,6 +27,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from tests.adversary import CONSTRAINS_ENDPOINTS as ENDPOINTS
 from tests.adversary import CONSTRAINS_PRINCIPALS as PRINCIPALS
 from tests.adversary import CONSTRAINS_RESOURCES as RESOURCES
 from tests.adversary import OTHER_ORG, Property
@@ -56,12 +57,23 @@ PROPERTIES = (
     Property("ORG-C-01", "Requests only in allowed regions", PRINCIPALS,
              not_actions=GLOBAL_SERVICES, reads=("region",),
              deny_when=lambda r, f: r.region not in f.allowed_regions),
-    Property("ORG-C-02", "Organization principals reach only organization S3 resources", PRINCIPALS,
-             actions=("s3:*",), reads=("resource_org",), break_glass_exempt=False,
-             deny_when=lambda r, f: r.resource_org != f.org_id),
+    Property("ORG-C-02", "Organization principals reach only organization S3 resources and named trusted accounts",
+             PRINCIPALS, actions=("s3:*",), reads=("resource_org", "resource_account"), break_glass_exempt=False,
+             deny_when=lambda r, f: r.resource_org != f.org_id
+             and r.resource_account not in f.trusted_resource_accounts),
     Property("ORG-C-03", "Only organization principals (or AWS services) reach S3 and KMS resources", RESOURCES,
              actions=("s3:*", "kms:*"), break_glass_exempt=False,
              deny_when=lambda r, f: not r.principal.service and r.principal.org_id != f.org_id),
+    # The data perimeter on the network path: whoever comes through the organization's VPC endpoints, with
+    # whatever credentials (or none), reaches only the organization's resources and named trusted accounts.
+    Property("ORG-C-05", "Only organization principals use the organization's VPC endpoints", ENDPOINTS,
+             actions=("*",), break_glass_exempt=False,
+             deny_when=lambda r, f: r.principal.org_id != f.org_id),
+    Property("ORG-C-06", "The organization's VPC endpoints reach only organization resources and named trusted "
+             "accounts", ENDPOINTS, actions=("*",), reads=("resource_org", "resource_account"),
+             break_glass_exempt=False,
+             deny_when=lambda r, f: r.resource_org != f.org_id
+             and r.resource_account not in f.trusted_resource_accounts),
     Property("ORG-C-04", "Only break-glass principals change or pass break-glass and exception roles", PRINCIPALS,
              actions=ROLE_CHANGES, resources=lambda f: f.protected_roles),
     Property("ATH-C-01", "Athena only in the authorized preview accounts", PRINCIPALS,
@@ -149,4 +161,20 @@ ACCEPTED_RISKS = (
               "changing those trust policies, not what is already in them; the management account isn't bound "
               "by SCPs. Break-glass is held to the data perimeter, so it can't move data out of the organization.",
         boundary=(({"action": "s3:PutObject", "principal": "break-glass", "resource_org": OTHER_ORG}, "ORGC02"),)),
+    AcceptedRisk(
+        "AR-05", ("ORG-C-05", "ORG-C-06"),
+        "Traffic that doesn't come through the organization's VPC endpoints (a NAT or internet gateway, a proxy, "
+        "a device off the network) is outside the endpoint policy, so third-party credentials can still move "
+        "data out that way.",
+        "Organization and endpoint policies can't see such traffic: no SCP or RCP applies to a third-party "
+        "principal writing to a third-party resource. It has to be closed in the network (no internet egress "
+        "from workload VPCs, egress filtering), which is outside this tool.",
+        "security-team", _PROPOSED, ("private-preview", "contained", "hardened"),
+        {"principal": "external", "action": "s3:PutObject", "resource_org": OTHER_ORG, "vpce": None},
+        reach="Anyone with a network path that bypasses the organization's endpoints and credentials for an "
+              "outside account (or none, for a public bucket).",
+        boundary=(({"principal": "external", "action": "s3:PutObject", "resource_org": OTHER_ORG,
+                    "vpce": "vpce-0example2222222222"}, "ORGC05"),
+                  ({"principal": "anonymous", "action": "s3:PutObject", "resource_org": None,
+                    "vpce": "vpce-0example2222222222"}, "ORGC05"))),
 )

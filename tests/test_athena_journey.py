@@ -42,6 +42,7 @@ CATALOG = load_index()  # the pinned NIST SP 800-53 index in catalogs/
 PREVIEW = "111122223333"
 OTHER = "444455556666"   # an organization account not on the preview list
 VPCE = "vpce-0example1111111111"
+ENDPOINTS = {VPCE, "vpce-0example2222222222"}  # every VPC endpoint in the request's org_state
 ORG, OTHER_ORG = "o-exampleorgid", "o-otherorgid"
 
 # What the organization already allows for other services (an existing
@@ -56,7 +57,8 @@ def load(name):
 
 
 def req(action, account=PREVIEW, region="ca-central-1", role="analyst", vpce=VPCE, resource="*", **context):
-    ctx = {"aws:ViaAWSService": "false", "aws:PrincipalIsAWSService": "false", "aws:PrincipalOrgID": ORG}
+    ctx = {"aws:ViaAWSService": "false", "aws:PrincipalIsAWSService": "false", "aws:PrincipalOrgID": ORG,
+           "aws:ResourceOrgID": ORG}
     if vpce:
         ctx["aws:SourceVpce"] = vpce
     ctx.update(context)
@@ -129,12 +131,24 @@ class Vectors:
         ("ORG-C-02", "exemption", req("s3:PutObject", role="break-glass", **{"aws:ResourceOrgID": OTHER_ORG}),
          False, "ORGC02"),
         ("ORG-C-03", "positive", req("s3:GetObject", **{"aws:ResourceOrgID": ORG}), True, None),
-        ("ORG-C-03", "positive", req("kms:Decrypt", **{"aws:ResourceOrgID": ORG, "aws:PrincipalOrgID": OTHER_ORG,
-                                                        "aws:PrincipalIsAWSService": "true"}), True, None),
+        # An AWS service principal: it doesn't come through the organization's endpoints.
+        ("ORG-C-03", "positive", req("kms:Decrypt", vpce=None, **{"aws:ResourceOrgID": ORG,
+                                                                  "aws:PrincipalOrgID": OTHER_ORG,
+                                                                  "aws:PrincipalIsAWSService": "true"}), True, None),
         ("ORG-C-03", "negative", req("s3:GetObject", **{"aws:ResourceOrgID": ORG, "aws:PrincipalOrgID": OTHER_ORG}),
          False, "ORGC03"),
         ("ORG-C-03", "exemption", req("kms:Decrypt", role="break-glass",
                                       **{"aws:ResourceOrgID": ORG, "aws:PrincipalOrgID": OTHER_ORG}), False, "ORGC03"),
+        # Through the organization's endpoint, whoever calls; break-glass is held to it too.
+        ("ORG-C-05", "positive", req("glue:GetTable"), True, None),
+        ("ORG-C-05", "negative", req("glue:GetTable", account="999988887777", **{"aws:PrincipalOrgID": OTHER_ORG}),
+         False, "ORGC05"),
+        ("ORG-C-05", "exemption", req("glue:GetTable", role="break-glass", **{"aws:PrincipalOrgID": OTHER_ORG}),
+         False, "ORGC05"),
+        ("ORG-C-06", "positive", req("glue:GetTable"), True, None),
+        ("ORG-C-06", "negative", req("glue:CreateTable", **{"aws:ResourceOrgID": OTHER_ORG}), False, "ORGC06"),
+        ("ORG-C-06", "exemption", req("glue:CreateTable", role="break-glass", **{"aws:ResourceOrgID": OTHER_ORG}),
+         False, "ORGC06"),
         ("ORG-C-04", "positive", req("iam:CreateRole", resource=f"arn:aws:iam::{PREVIEW}:role/analytics-etl"), True, None),
         ("ORG-C-04", "negative", req("iam:CreateRole", resource=f"arn:aws:iam::{PREVIEW}:role/BreakGlass-x"),
          False, "ORGC04"),
@@ -169,9 +183,11 @@ class JourneyTest(unittest.TestCase):
     def check_vectors(self, tier, vectors):
         _, _, _, generated = self.tier(tier)
         scps, rcps = levels(generated)
+        endpoint = [p for n, p in generated["policies"].items() if n.startswith("vpce-")]
         for cid, kind, request, allowed, sid in vectors:
             with self.subTest(tier=tier, control=cid, kind=kind, action=request.action):
-                decision = evaluate(request, scps, rcps)
+                through = request.context.get("aws:SourceVpce") in ENDPOINTS
+                decision = evaluate(request, scps, rcps, endpoint if through else ())
                 self.assertEqual(decision.allowed, allowed, decision.reason)
                 if sid:
                     self.assertEqual(decision.statement, sid)
@@ -180,7 +196,7 @@ class JourneyTest(unittest.TestCase):
     def test_private_preview_scope(self):
         _, sel, controls, _ = self.tier("private-preview")
         self.assertEqual(sel["controls"], ["ATH-C-01", "ATH-C-02", "ATH-C-03", "ATH-C-04",
-                                           "ORG-C-01", "ORG-C-02", "ORG-C-03", "ORG-C-04"])
+                                           "ORG-C-01", "ORG-C-02", "ORG-C-03", "ORG-C-04", "ORG-C-05", "ORG-C-06"])
         self.assertEqual({c["mode"] for c in controls.values()}, {"Enforce"})
         self.assertEqual(sel["next_tier"]["tier"], "Contained")
         self.assertEqual(sel["next_tier"]["retires"], ["ATH-C-01"])
@@ -206,8 +222,8 @@ class JourneyTest(unittest.TestCase):
         _, sel, controls, _ = self.tier("contained")
         self.assertNotIn("ATH-C-01", sel["controls"])
         self.assertEqual(sel["retired"], [{"control_id": "ATH-C-01", "reason": "applies until Private Preview"}])
-        self.assertEqual(len(sel["controls"]), 15)
-        self.assertEqual(sel["counts"]["class"], {"Containment": 7, "Supervision": 8})
+        self.assertEqual(len(sel["controls"]), 17)
+        self.assertEqual(sel["counts"]["class"], {"Containment": 9, "Supervision": 8})
         for cid, rec in controls.items():
             if rec["class"] == "Supervision":
                 self.assertIn(rec["mode"], ("Enforce with override", "Enforce"), cid)
@@ -229,14 +245,15 @@ class JourneyTest(unittest.TestCase):
         _, sel, _, _ = self.tier("contained")
         changes = {c["control_id"]: c["change"] for c in sel["registry_changes"]}
         self.assertEqual(changes, {"ORG-C-01": "reused", "ORG-C-02": "reused", "ORG-C-03": "reused",
-                                   "ORG-C-04": "reused", "ORG-S-01": "added", "ORG-S-02": "added"})
+                                   "ORG-C-04": "reused", "ORG-C-05": "reused", "ORG-C-06": "reused",
+                                   "ORG-S-01": "added", "ORG-S-02": "added"})
 
     # --- Hardened --------------------------------------------------------------------
     def test_hardened_scope(self):
         _, sel, controls, _ = self.tier("hardened")
-        self.assertEqual(len(sel["controls"]), 21)
+        self.assertEqual(len(sel["controls"]), 23)
         self.assertIsNone(sel["next_tier"])
-        self.assertEqual(sel["counts"]["mode"], {"Enforce": 10, "Enforce with override": 5, "Advise": 5, "Report": 1})
+        self.assertEqual(sel["counts"]["mode"], {"Enforce": 12, "Enforce with override": 5, "Advise": 5, "Report": 1})
         self.assertEqual(controls["ATH-H-01"]["mode"], "Advise")   # Low, Security Hub, Moderate
         self.assertEqual(controls["ATH-H-04"]["mode"], "Report")   # Informational
 
@@ -335,8 +352,8 @@ class JourneyTest(unittest.TestCase):
         vectors = Vectors.CONTAINMENT + Vectors.SUPERVISION
         for tier in TIERS:
             for cid, status in self.tier(tier)[3]["report"]["controls"].items():
-                for platform in ("scp", "rcp"):
-                    if status[platform]["status"] != "generated":
+                for platform in ("scp", "rcp", "vpce"):
+                    if status.get(platform, {}).get("status") != "generated":
                         continue
                     kinds = {kind for vid, kind, *_ in vectors if vid == cid}
                     with self.subTest(tier=tier, control=cid, platform=platform):
@@ -363,7 +380,8 @@ class JourneyCliTest(unittest.TestCase):
                                        "--out", str(run)]), 0)
                 self.assertEqual(main(["generate", str(request), "--run", str(run)]), 0)
                 registry = json.loads((run / "registry.json").read_text())
-            self.assertEqual(len(list((tmp / "hardened" / "controls").glob("*.json"))), 21)
+            self.assertEqual(len(list((tmp / "hardened" / "controls").glob("*.json"))), 23)
+            self.assertTrue((tmp / "hardened" / "org-policies" / "vpce-org-guardrails.json").exists())
             self.assertTrue((tmp / "hardened" / "org-policies" / "scp-org-guardrails.json").exists())
 
 

@@ -14,13 +14,14 @@ from .catalog import CATALOG_ID, FRAMEWORK as NIST
 from .model import ControlClass, Severity, Tier
 
 FINDINGS_SCHEMA = "findings/v1"
-PLATFORMS = ("scp", "rcp", "boundary", "config", "cloudtrail", "sentinel")
+PLATFORMS = ("scp", "rcp", "vpce", "boundary", "config", "cloudtrail", "sentinel")
 DETECTIVE_PLATFORMS = ("config", "cloudtrail")
 STATUSES = ("planned", "not_expressible", "not_applicable")
 SEVERITY_SOURCES = ("security-hub", "rubric")
 MAPPING_TYPES = ("aws-mapped", "publisher-mapped", "inferred")
 VERIFICATIONS = ("verified", "unverifiable", "contradicted", "not-run")
-GUARDRAIL_TYPES = ("scp", "rcp")
+# vpce: a statement in the baseline policy on every VPC endpoint the organization runs.
+GUARDRAIL_TYPES = ("scp", "rcp", "vpce")
 CONDITION_OPERATORS = (
     "StringEquals", "StringNotEquals", "StringLike", "StringNotLike",
     "StringEqualsIfExists", "StringNotEqualsIfExists", "StringLikeIfExists", "StringNotLikeIfExists",
@@ -60,8 +61,11 @@ def _check_guardrail(g: Any, where: str, problems: list[str]) -> None:
         problems.append(f"{where}.guardrail needs exactly one of actions or not_actions")
     for key in ("actions", "not_actions"):
         if key in g and (not isinstance(g[key], list) or not g[key]
-                         or not all(isinstance(a, str) and ":" in a for a in g[key])):
-            problems.append(f"{where}.guardrail.{key} must be a list of prefix:Action strings")
+                         or not all(isinstance(a, str) and (a == "*" or ":" in a) for a in g[key])):
+            problems.append(f"{where}.guardrail.{key} must be a list of prefix:Action strings (or *)")
+    optional = g.get("optional_parameters", [])
+    if not isinstance(optional, list) or not all(isinstance(o, str) for o in optional):
+        problems.append(f"{where}.guardrail.optional_parameters must be a list of parameter names")
     if not isinstance(g.get("break_glass_exempt", True), bool):
         problems.append(f"{where}.guardrail.break_glass_exempt must be true or false")
     resources = g.get("resources", ["*"])

@@ -46,7 +46,7 @@ _KNOWN_FIELDS = {
     "control_registry", "maker", "checker", "criticality", "data_classification",
     "regulatory_profile", "jurisdictions", "allowed_regions", "framework_profile",
     "capabilities_excluded", "exceptions", "break_glass_principals", "source_pins",
-    "run_mode", "non_production_attested", "decisions",
+    "run_mode", "non_production_attested", "decisions", "trusted_resource_accounts",
 }
 _EXCEPTION_FIELDS = ("principal", "control_id", "owner", "expires", "rationale")
 
@@ -91,6 +91,9 @@ class OnboardingRequest:
     capabilities_excluded: tuple[str, ...] = ()
     exceptions: tuple[OnboardingException, ...] = ()
     break_glass_principals: tuple[str, ...] = ()
+    # Accounts outside the organization whose resources the organization's VPC
+    # endpoints may reach (vendors, AWS-owned buckets). Empty: none may be reached.
+    trusted_resource_accounts: tuple[str, ...] = ()
     source_pins: dict = field(default_factory=dict)
     # Analyst decisions the spec leaves open per service, e.g. {"network_perimeter": "vpc-endpoint"}.
     decisions: dict = field(default_factory=dict)
@@ -238,6 +241,10 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
     jurisdictions = _strings(data.get("jurisdictions"), "jurisdictions", problems)
     excluded = _strings(data.get("capabilities_excluded"), "capabilities_excluded", problems)
     break_glass = _strings(data.get("break_glass_principals"), "break_glass_principals", problems)
+    trusted_accounts = _strings(data.get("trusted_resource_accounts"), "trusted_resource_accounts", problems)
+    bad = [a for a in trusted_accounts if not _ACCOUNT_ID.match(a)]
+    if bad:
+        problems.append(f"trusted_resource_accounts must be 12-digit AWS account IDs: {', '.join(bad)}")
     bad = [b for b in break_glass if not _BREAK_GLASS.match(b)]
     if bad:
         problems.append("break_glass_principals must be IAM role ARNs in a 12-digit account, optionally "
@@ -255,5 +262,6 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         jurisdictions=jurisdictions, allowed_regions=regions,
         framework_profile=data.get("framework_profile") or DEFAULT_FRAMEWORK_PROFILE,
         capabilities_excluded=excluded, exceptions=tuple(exceptions),
-        break_glass_principals=break_glass, source_pins=source_pins, decisions=decisions,
+        break_glass_principals=break_glass, trusted_resource_accounts=trusted_accounts,
+        source_pins=source_pins, decisions=decisions,
     )
