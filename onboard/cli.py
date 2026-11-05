@@ -13,6 +13,7 @@ from .controls import FindingsError, load_findings
 from .generate import GenerateError, generate
 from .request import RequestError, parse_request
 from .resolve import ResolveError, resolve
+from .review import ACCEPTANCES_SCHEMA, EVIDENCE_SCHEMA, load_optional, load_run, review
 from .select import SelectError, select
 from .service_reference import INDEX_URL, ServiceReference, SourceError, check_url, http_fetch
 
@@ -107,6 +108,31 @@ def cmd_generate(args) -> int:
     return 0
 
 
+# Exit codes for `review`, so a pipeline can gate on them.
+REVIEW_EXIT = {"release": 0, "hold": 3, "blocked": 4}
+
+
+def cmd_review(args) -> int:
+    request = _load_request(args.request)
+    run = Path(args.run)
+    files, problems = load_run(run)
+    evidence_path = Path(args.evidence) if args.evidence else run / "evidence.json"
+    evidence = load_optional(evidence_path if evidence_path.exists() or args.evidence else None,
+                             EVIDENCE_SCHEMA, problems)
+    acceptances = load_optional(Path(args.acceptances) if args.acceptances else None, ACCEPTANCES_SCHEMA, problems)
+    result = review(request, files, evidence=evidence, acceptances=acceptances,
+                    catalog=load_index(Path(args.catalog)), load_problems=tuple(problems))
+    _write_json(run / "review.json", result)
+    counts = result["counts"]
+    print(f"{result['decision'].upper()}: {len(result['blockers'])} blockers, "
+          f"{counts['needs acceptance']} doubts need a person, {counts['accepted']} accepted, "
+          f"{counts['auto-accepted']} auto-accepted (ceiling {result['auto_accept_ceiling'] or 'none'}); "
+          f"wrote {run / 'review.json'}")
+    for blocker in result["blockers"]:
+        print(f"  blocker {blocker['check']}: {blocker['subject']}: {blocker['detail']}")
+    return REVIEW_EXIT[result["decision"]]
+
+
 def cmd_catalog(args) -> int:
     if args.source:
         # A local copy of the OSCAL catalog; record where it came from.
@@ -153,6 +179,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("request", help="request JSON file")
     p.add_argument("--run", required=True, help="run directory written by select")
     p.set_defaults(func=cmd_generate)
+
+    p = sub.add_parser("review", help="Review stage: decide whether the run may be released without a person "
+                                      "(exit 0 release, 3 hold, 4 blocked)")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--run", required=True, help="run directory written by generate")
+    p.add_argument("--evidence", help="verification evidence (default: evidence.json in the run, if present)")
+    p.add_argument("--acceptances", help="human acceptances of earlier doubts (acceptances/v1)")
+    p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
+    p.set_defaults(func=cmd_review)
 
     args = parser.parse_args(argv)
     try:
