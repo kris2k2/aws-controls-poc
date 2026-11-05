@@ -245,6 +245,87 @@
       "title": "Only organization principals reach S3 and KMS resources"
     },
     {
+      "blind_spots": [
+        "management account",
+        "roles created before the guardrail is attached"
+      ],
+      "citations": [],
+      "class": "Containment",
+      "control_id": "ORG-C-04",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-6.10",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-2.7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "iam:AttachRolePolicy",
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:DeleteRolePermissionsBoundary",
+          "iam:DeleteRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:PassRole",
+          "iam:PutRolePermissionsBoundary",
+          "iam:PutRolePolicy",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:UpdateRole",
+          "iam:UpdateRoleDescription"
+        ],
+        "resources": [
+          "${protected_roles}"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "no delegated role creation for Athena",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "any of the guarded IAM calls on a break-glass or exception role",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "role trust and permission changes are events, not configuration drift Config can judge",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "IAM is not an RCP-supported service",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "checks": "forbid Terraform changes to break-glass and exception roles",
+          "level": "hard-mandatory",
+          "status": "planned"
+        }
+      },
+      "notes": "Every guardrail exempts break-glass principals, and Enforce-with-override guardrails exempt approved exceptions. The exemption matches on the role ARN, so it is only as strong as the protection of those roles: without this control, anyone allowed to create roles could create one with a break-glass name and skip every guardrail. IAM actions checked against the AWS service reference on 2026-11-05: each has the role as its resource.",
+      "objective": "privilege-escalation",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Only break-glass principals change or pass break-glass and exception roles"
+    },
+    {
       "citations": [
         {
           "anchor": "Private Preview authorization",
@@ -409,13 +490,15 @@
       ],
       "guardrail": {
         "actions": [
-          "athena:StartSession",
-          "athena:StartCalculationExecution",
           "athena:CreateNotebook",
-          "athena:ImportNotebook",
-          "athena:ExportNotebook",
           "athena:CreatePresignedNotebookUrl",
-          "athena:GetSessionEndpoint"
+          "athena:ExportNotebook",
+          "athena:GetSessionEndpoint",
+          "athena:ImportNotebook",
+          "athena:StartCalculationExecution",
+          "athena:StartSession",
+          "athena:UpdateNotebook",
+          "athena:UpdateNotebookMetadata"
         ],
         "type": "scp"
       },
@@ -445,6 +528,7 @@
           "status": "planned"
         }
       },
+      "notes": "Deny list from tests/fixtures/athena/action-review.json, which classifies every Spark action in the contract; reads and clean-up stay allowed.",
       "objective": "no-external-sharing",
       "severity": "High",
       "severity_source": "rubric",

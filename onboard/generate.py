@@ -1,8 +1,10 @@
 """Generate: render control records into artifacts.
 
 This slice renders the guardrail artifacts: SCP and RCP statements, plus the
-service's allow-list entry. Config rules, CloudTrail detections, Sentinel
-policies and boundaries are reported as pending, not silently skipped.
+service's allow-list entry. A guardrail applies to every resource unless it
+names `resources` (ARN patterns or ${parameters}). Config rules, CloudTrail
+detections, Sentinel policies and boundaries are reported as pending, not
+silently skipped.
 
 What each mode does to a guardrail (spec, "What each mode does per artifact"):
 Enforce deploys the deny with an exemption for break-glass principals only;
@@ -37,6 +39,10 @@ def parameters(request: OnboardingRequest, service: str) -> dict[str, list[str]]
         "preview_accounts": list(request.preview_accounts),
         "allowed_regions": list(request.allowed_regions),
         "break_glass_principals": list(request.break_glass_principals),
+        # Every role some guardrail exempts. Exemptions hold only while nobody
+        # else can create, change or pass these roles (ORG-C-04).
+        "protected_roles": sorted(set(request.break_glass_principals)
+                                  | {e.principal for e in request.exceptions}),
     }
     if isinstance(org.get("organization_id"), str):
         params["org_id"] = [org["organization_id"]]
@@ -85,6 +91,14 @@ def statement(record: dict, request: OnboardingRequest, params: dict) -> tuple[d
             return None, "Enforce with override: no approved exceptions, so no guardrail"
         exempt += approved
 
+    resources = guardrail.get("resources", ["*"])
+    for value in resources:
+        m = _PARAMETER.match(value)
+        if m and m.group(1) in params and not params[m.group(1)]:
+            # A deny on no resources is a no-op: say so rather than fail.
+            return None, f"{m.group(1)} is empty, so the guardrail applies to no resources"
+    resources = _resolve(resources, params, cid)
+
     conditions = {op: {k: _resolve(v, params, cid) for k, v in keys.items()}
                   for op, keys in copy.deepcopy(guardrail.get("conditions", {})).items()}
     _exempt(conditions, exempt)
@@ -95,7 +109,7 @@ def statement(record: dict, request: OnboardingRequest, params: dict) -> tuple[d
         stmt["Action"] = guardrail["actions"]
     else:
         stmt["NotAction"] = guardrail["not_actions"]
-    stmt["Resource"] = "*"
+    stmt["Resource"] = resources if len(resources) > 1 else resources[0]
     if conditions:
         stmt["Condition"] = conditions
     return stmt, "generated"

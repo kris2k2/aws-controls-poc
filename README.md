@@ -20,7 +20,7 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 | 2. Assess | Not started (the Athena test case uses hand-written findings) |
 | 3. Select | Done: tier scope, modes, retirement on promotion, registry reuse and escalation, checker items, next tier; every NIST SP 800-53 identifier resolved in the pinned OSCAL catalog |
 | 4. Generate | Partial: SCP and RCP guardrails and the allow-list; Config, CloudTrail and Sentinel are reported as pending |
-| 5. Compose · 6. Validate | Not started; a local SCP/RCP evaluator backs the Level 1 guardrail tests |
+| 5. Compose · 6. Validate | Not started; a local SCP/RCP evaluator backs the Level 1 guardrail tests, including the adversarial suite: a bounded proof of each guardrail against a reviewed security spec, plus mutation testing ([ADR-0003](docs/adr/0003-adversarial-verification-of-guardrails.md)) |
 
 Initial test case: [Athena from Private Preview to Hardened](docs/simulations/athena-journey.md).
 
@@ -58,3 +58,8 @@ Keep real requests, org state and run outputs out of the repository.
 ```sh
 python3 -m unittest discover -s tests -t .
 ```
+
+A guardrail change also needs its security property in
+`tests/athena_security_spec.py` (what the control must deny); the adversarial
+tests compare the generated statement with it. See
+[section 5 of the Athena journey](docs/simulations/athena-journey.md#5-adversarial-verification).

@@ -38,13 +38,14 @@ class FindingsError(ValueError):
 
 
 def parameters_of(guardrail: dict) -> set[str]:
-    """Names of the ${parameters} a guardrail's conditions refer to."""
+    """Names of the ${parameters} a guardrail's conditions and resources refer to."""
+    values = [v for keys in guardrail.get("conditions", {}).values() for v in keys.values()]
+    values += guardrail.get("resources", [])
     names = set()
-    for keys in guardrail.get("conditions", {}).values():
-        for value in keys.values():
-            m = _PARAMETER.match(value) if isinstance(value, str) else None
-            if m:
-                names.add(m.group(1))
+    for value in values:
+        m = _PARAMETER.match(value) if isinstance(value, str) else None
+        if m:
+            names.add(m.group(1))
     return names
 
 
@@ -61,6 +62,9 @@ def _check_guardrail(g: Any, where: str, problems: list[str]) -> None:
         if key in g and (not isinstance(g[key], list) or not g[key]
                          or not all(isinstance(a, str) and ":" in a for a in g[key])):
             problems.append(f"{where}.guardrail.{key} must be a list of prefix:Action strings")
+    resources = g.get("resources", ["*"])
+    if not isinstance(resources, list) or not resources or not all(isinstance(r, str) and r for r in resources):
+        problems.append(f"{where}.guardrail.resources must be a non-empty list of ARN patterns or ${{parameters}}")
     conditions = g.get("conditions", {})
     if not isinstance(conditions, dict):
         problems.append(f"{where}.guardrail.conditions must be an object")
