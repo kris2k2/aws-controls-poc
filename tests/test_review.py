@@ -1,9 +1,10 @@
-"""Review: the release decision on generated policy sets (ADR-0005).
+"""Review: the release decision on generated policy sets (ADR-0005, ADR-0006).
 
-Runs are built with the real pipeline from the Athena fixtures. Evidence here
-is synthetic (`source: "synthetic: test"`): no stage produces proofs or impact
-replays yet, so the tests supply them to show what the reviewer does with
-them.
+Runs are built with the real pipeline from the Athena fixtures, Resolve
+included, so the reviewer's own run of Verify proves the guardrails. Impact
+and calibration evidence here is synthetic (`source: "synthetic: test"`): no
+stage produces it yet, so the tests supply it to show what the reviewer does
+with it.
 """
 
 import copy
@@ -14,6 +15,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from onboard.cli import main
 from onboard.request import parse_request
@@ -21,6 +23,7 @@ from onboard.review import (
     ACCEPTANCES_SCHEMA, EVALUATOR_SHA256, EVIDENCE_SCHEMA, _Findings, check_policies, deny_statements, load_run,
     review, sha256,
 )
+from tests.test_athena_acceptance import SNAPSHOT
 from tests.test_athena_journey import CATALOG, FIXTURES, load
 
 TODAY = dt.date(2026, 11, 5)
@@ -28,10 +31,10 @@ CHECKER = "analyst-b"
 
 
 def evidence_for(policies, result="pass", calibration=True):
-    """Synthetic passing proof and impact evidence for every deny in the policies."""
-    items = [{"kind": kind, "policy": name, "sid": stmt["Sid"], "statement_sha256": sha256(stmt),
+    """Synthetic passing impact evidence for every deny in the policies, and calibration."""
+    items = [{"kind": "impact", "policy": name, "sid": stmt["Sid"], "statement_sha256": sha256(stmt),
               "result": result, "source": "synthetic: test", "detail": "test"}
-             for name, stmt in deny_statements(policies) for kind in ("proof", "impact")]
+             for name, stmt in deny_statements(policies)]
     if calibration:
         items.append({"kind": "calibration", "evaluator_sha256": EVALUATOR_SHA256, "result": "pass",
                       "source": "synthetic: test"})
@@ -54,7 +57,7 @@ class RunCase(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
 
-    def build(self, tier="private-preview", name=None, **overrides):
+    def build(self, tier="private-preview", name=None, findings=None, **overrides):
         data = load(f"request-{tier}.json")
         data.update(overrides)
         if tier != "private-preview" and "control_registry" not in data:
@@ -63,8 +66,13 @@ class RunCase(unittest.TestCase):
         name = name or tier
         request_path, run = self.tmp / f"{name}.json", self.tmp / name
         request_path.write_text(json.dumps(data))
+        findings_path = FIXTURES / "findings.json"
+        if findings is not None:
+            findings_path = self.tmp / f"{name}-findings.json"
+            findings_path.write_text(json.dumps(findings))
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["select", str(request_path), "--findings", str(FIXTURES / "findings.json"),
+            self.assertEqual(main(["resolve", str(request_path), "--out", str(run), "--snapshot", str(SNAPSHOT)]), 0)
+            self.assertEqual(main(["select", str(request_path), "--findings", str(findings_path),
                                    "--out", str(run)]), 0)
             self.assertEqual(main(["generate", str(request_path), "--run", str(run)]), 0)
         return request_path, run
@@ -79,23 +87,65 @@ class RunCase(unittest.TestCase):
 
 
 class DecisionTest(RunCase):
-    def test_without_evidence_a_person_must_accept_every_unproven_deny(self):
+    def test_the_reviewer_proves_every_deny_itself(self):
         result = self.review(*self.build())
         self.assertEqual(result["decision"], "hold")
         self.assertEqual(result["blockers"], [])
-        self.assertEqual(result["residual_risk"], "High")
+        self.assertEqual(result["problems"], [])
         open_ = self.doubts(result, "needs acceptance")
-        # Organization-wide denies are High: they reach every account. Athena's own are Medium.
-        self.assertEqual(open_["evidence-proof:scp-org-guardrails/ORGC01"]["risk"], "High")
+        self.assertFalse([d for d in open_ if d.startswith("evidence-proof:")], "every deny is proved")
+        # What is left about the proofs: the spec they are against isn't signed off, nor are its accepted risks.
+        self.assertIn("security-spec:athena", open_)
+        self.assertEqual({d for d in open_ if d.startswith("accepted-risk:")},
+                         {"accepted-risk:AR-01", "accepted-risk:AR-02", "accepted-risk:AR-03", "accepted-risk:AR-05"})
+        # Proofs say nothing about outages: organization-wide denies need impact replays, and they are High.
+        self.assertEqual(result["residual_risk"], "High")
         self.assertEqual(open_["evidence-impact:scp-org-guardrails/ORGC01"]["risk"], "High")
-        self.assertEqual(open_["evidence-proof:scp-athena-guardrails/ATHC03"]["risk"], "Medium")
         # On a new service nobody uses it yet, so its own denies break nothing running.
         self.assertNotIn("evidence-impact:scp-athena-guardrails/ATHC03", open_)
         self.assertIn("calibration:evaluator", open_)
         self.assertIn("break-glass:principals", open_)
         self.assertEqual(len(result["acceptance_template"]["acceptances"]), len(open_))
         # The numbers in docs/simulations/athena-journey.md, section 6.
-        self.assertEqual(result["counts"], {"needs acceptance": 27, "accepted": 0, "auto-accepted": 11})
+        self.assertEqual(result["counts"], {"needs acceptance": 22, "accepted": 0, "auto-accepted": 11})
+
+    def test_without_the_api_contract_nothing_is_proved(self):
+        request_path, run = self.build()
+        (run / "capability-profile.json").unlink()
+        result = self.review(request_path, run)
+        self.assertEqual(result["decision"], "hold")
+        self.assertIn("evidence-proof:scp-athena-guardrails/ATHC03", self.doubts(result, "needs acceptance"))
+        self.assertTrue(any("capability-profile.json is missing" in p for p in result["problems"]))
+
+    def test_outside_proofs_are_ignored(self):
+        request_path, run = self.build()
+        (run / "capability-profile.json").unlink()
+        files, _ = load_run(run)
+        fake = {"schema": EVIDENCE_SCHEMA, "items": [
+            {"kind": "proof", "statement_sha256": sha256(stmt), "result": "pass", "source": "someone"}
+            for _, stmt in deny_statements(files["policies"])]}
+        result = self.review(request_path, run, evidence=fake)
+        self.assertIn("evidence-proof:scp-athena-guardrails/ATHC03", self.doubts(result, "needs acceptance"))
+        self.assertTrue(any("proofs come only from the reviewer's own run of Verify" in p
+                            for p in result["problems"]))
+
+    def test_signed_off_specs_and_risks_raise_no_doubt(self):
+        from onboard import review as review_module
+        real = review_module.verify
+
+        def signed(*args):
+            result = real(*args)
+            result["spec"]["status"] = "approved"
+            for risk in result["accepted_risks"]:
+                risk["status"] = "approved"
+            return result
+
+        request_path, run = self.build()
+        (run / "verification.json").unlink(missing_ok=True)
+        with mock.patch.object(review_module, "verify", signed):
+            result = self.review(request_path, run)
+        kinds = {d["kind"] for d in result["doubts"]}
+        self.assertFalse(kinds & {"security-spec", "accepted-risk"})
 
     def test_low_risk_doubts_are_accepted_by_the_reviewer_at_moderate(self):
         result = self.review(*self.build())
@@ -117,9 +167,10 @@ class DecisionTest(RunCase):
         evidence = evidence_for(files["policies"])
         first = self.review(request_path, run, evidence=evidence)
         self.assertEqual(first["decision"], "hold")
-        # With proofs, impact replays and calibration, what is left is judgement: severities and break-glass.
+        # With proofs, impact replays and calibration, what is left is judgement: severities, break-glass,
+        # the security spec and its accepted risks.
         self.assertEqual({d["kind"] for d in self.doubts(first, "needs acceptance").values()},
-                         {"inferred-severity", "break-glass"})
+                         {"inferred-severity", "break-glass", "security-spec", "accepted-risk"})
         result = self.review(request_path, run, evidence=evidence, acceptances=accept_all(first))
         self.assertEqual(result["decision"], "release")
         self.assertIsNone(result["residual_risk"])
@@ -161,12 +212,12 @@ class AcceptanceTest(RunCase):
         files2, _ = load_run(run2)
         self.assertEqual(self.review(request2, run2, evidence=evidence_for(files2["policies"]),
                                      acceptances=acceptances)["decision"], "release")
-        # Then the region policy opens a region. Only the doubts about what changed come back.
+        # Then the region policy opens a region. Verify proves the changed statement again on its own;
+        # only its impact replay, which nobody has redone, comes back to a person.
         request3, run3 = self.build(name="pp-region", allowed_regions=["ca-central-1", "eu-west-1", "ca-west-1"])
         result = self.review(request3, run3, evidence=evidence, acceptances=acceptances)
         self.assertEqual(result["decision"], "hold")
-        self.assertEqual(set(self.doubts(result, "needs acceptance")),
-                         {"evidence-proof:scp-org-guardrails/ORGC01", "evidence-impact:scp-org-guardrails/ORGC01"})
+        self.assertEqual(set(self.doubts(result, "needs acceptance")), {"evidence-impact:scp-org-guardrails/ORGC01"})
         self.assertEqual({e["sid"] for e in result["stale_evidence"]}, {"ORGC01"})
 
 
@@ -208,14 +259,25 @@ class BlockerTest(RunCase):
         self.assertBlocked(result, "complete")
         self.assertEqual(result["doubts"], [])
 
-    def test_a_failed_proof_blocks_and_cannot_be_accepted(self):
-        files, _ = load_run(self.run)
-        evidence = evidence_for(files["policies"])
-        evidence["items"][0]["result"] = "fail"
-        first = self.review(self.request_path, self.run, evidence=evidence)
-        self.assertBlocked(first, "evidence-proof")
-        result = self.review(self.request_path, self.run, evidence=evidence, acceptances=accept_all(first))
+    def test_findings_that_weaken_a_guardrail_fail_its_proof_and_cannot_be_accepted(self):
+        # A bad Assess: the findings drop a Spark action from ATH-C-03. Select and Generate reproduce it
+        # faithfully, so only the proof against the reviewed spec can catch it.
+        findings = load("findings.json")
+        ath_c_03 = next(c for c in findings["candidates"] if c["control_id"] == "ATH-C-03")
+        ath_c_03["guardrail"]["actions"].remove("athena:UpdateNotebook")
+        request_path, run = self.build(name="weak", findings=findings)
+        first = self.review(request_path, run)
+        self.assertBlocked(first, "evidence-proof", "scp-athena-guardrails/ATHC03")
+        self.assertNotIn("reproducible", {b["check"] for b in first["blockers"]})
+        result = self.review(request_path, run, acceptances=accept_all(first))
         self.assertBlocked(result, "evidence-proof")
+
+    def test_an_edited_verification_report_is_blocked(self):
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["verify", str(self.request_path), "--run", str(self.run)]), 0)
+        self.assertEqual(self.review(self.request_path, self.run)["blockers"], [])
+        self.edit(self.run / "verification.json", lambda d: d["proofs"][0].update(detail="looks fine"))
+        self.assertBlocked(self.review(self.request_path, self.run), "reproducible", "verification.json")
 
     def test_a_failed_calibration_blocks(self):
         files, _ = load_run(self.run)

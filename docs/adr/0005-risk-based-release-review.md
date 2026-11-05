@@ -3,6 +3,9 @@
 - **Status:** proposed
 - **Date:** 2026-11-05
 - **Deciders:** repository owner and security team (pending review)
+- **Amended by:** [ADR-0006](0006-verify-stage.md): the reviewer now proves each run itself
+  with Verify, takes no proofs from outside evidence, and raises doubts for an
+  unsigned security spec and for each accepted risk.
 
 ## Context
 
@@ -109,7 +112,7 @@ its own ADR first (AGENTS.md).
   wide ones are High. The Athena Private Preview run holds with 27 doubts for
   a person and 11 accepted by the reviewer. That is the honest result.
 - To reach unattended release, the next pieces are:
-  1. **Verify stage:** move the attacker model and bounded proof from
+  1. **Verify stage** (done, ADR-0006): move the attacker model and bounded proof from
      `tests/` into the tool, with per-service security specs, so a run writes
      its own `proof` evidence.
   2. **Impact replay:** replay recent CloudTrail activity (or IAM Access

@@ -3,6 +3,9 @@
 - **Status:** proposed
 - **Date:** 2026-11-05
 - **Deciders:** repository owner and security team (pending review)
+- **Amended by:** [ADR-0006](0006-verify-stage.md): the spec and the attacker model moved
+  from `tests/` to `onboard/specs/` and `onboard/adversary.py`, and the Verify
+  stage runs the proof and the mutation testing on every run.
 
 ## Context
 

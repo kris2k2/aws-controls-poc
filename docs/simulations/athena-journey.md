@@ -10,7 +10,7 @@ the spec's `report.md` layout where they apply.
 | Requests | `tests/fixtures/athena/request-{private-preview,contained,hardened}.json` (synthetic org `o-exampleorgid`, preview account `111122223333`, data classification Internal Restricted, criticality Moderate) |
 | Candidate controls | `tests/fixtures/athena/findings.json`: 24 candidates, hand-written in place of Assess |
 | API contract | AWS service reference snapshot, `tests/fixtures/service-reference/2026-10-30/` |
-| Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_adversarial.py` (guardrails against an attacker, see [section 5](#5-adversarial-verification)), `tests/test_review.py` (release review, [section 6](#6-release-review)), `tests/test_athena_acceptance.py` (Resolve) |
+| Tests | `tests/test_athena_journey.py` (outcomes), `tests/test_athena_adversarial.py` (guardrails against an attacker, see [section 5](#5-adversarial-verification)), `tests/test_verify.py` (the Verify stage), `tests/test_review.py` (release review, [section 6](#6-release-review)), `tests/test_athena_acceptance.py` (Resolve) |
 | Run it | see [Reproduce](#reproduce) |
 
 **How to read this.** Tier outcomes, modes and guardrail behaviour are tool
@@ -179,13 +179,16 @@ ATH-H-06 becomes Enforce with override:
 
 The vectors above show each guardrail works for the requests its author
 thought of. `tests/test_athena_adversarial.py` checks the guardrails against
-what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification-of-guardrails.md)):
+what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification-of-guardrails.md)).
+Layers 3, 4 and 6 also run on every real run, as the Verify stage
+([ADR-0006](../adr/0006-verify-stage.md), `tests/test_verify.py`): every Athena
+deny is proved at each tier, and 150 to 190 mutants per run are caught.
 
-1. **Security spec** (`tests/athena_security_spec.py`): one property per
+1. **Security spec** (`onboard/specs/organization.py` and `athena.py`): one property per
    preventive control, saying what it must deny, written from the control's
    objective rather than its guardrail. This is what the security team
    reviews.
-2. **Attacker model** (`tests/adversary.py`): the action (all 81 Athena
+2. **Attacker model** (`onboard/adversary.py`): the action (all 81 Athena
    actions in the contract, plus dependencies, global services and one
    service nothing allows, in any case), the resource, the principal (role
    name and path, account inside or outside the organization, a standalone
@@ -198,10 +201,11 @@ what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification
    denies, over every combination of the dimensions either side reads. Actions
    and resources are grouped into classes every pattern treats alike, so the
    check is exhaustive over the model rather than sampled.
-4. **Contract completeness** (`tests/fixtures/athena/action-review.json`):
+4. **Contract completeness** (`onboard/specs/athena-action-review.json`):
    every Athena action in the contract is listed, and every data catalog and
    Spark action is either denied or allowed with a reason. A contract refresh
-   that adds an action fails until it is reviewed.
+   that adds an action fails the tests, and fails Verify for ATH-C-02 and
+   ATH-C-03, until it is reviewed.
 5. **Exemption hygiene:** exemptions name a role in a 12-digit account, and
    every exempt role is protected by ORG-C-04 from everyone else.
 6. **Mutation testing:** 709 mutants of the generated statements (dropped or
@@ -210,8 +214,9 @@ what an attacker can do instead ([ADR-0003](../adr/0003-adversarial-verification
    model and listed with the reason. The endpoint policy's base allow is
    checked to allow everything its guardrails don't deny.
 7. **Accepted risks:** the gaps left open on purpose, each with its reach,
-   pinned by a request that must stay allowed and by boundary requests that
-   must stay denied. Their sign-off is pending.
+   registered in the spec and pinned in the tests by a request that must stay
+   allowed and by boundary requests that must stay denied. Their sign-off is
+   pending; until then each is a doubt in the release review.
 
    | Risk | Who can use it, from where | Boundary pinned |
    |---|---|---|
@@ -235,25 +240,30 @@ missed `UpdateNotebook` and `UpdateNotebookMetadata`.
 
 `onboard review` decides whether a run may be released without a person
 ([ADR-0005](../adr/0005-risk-based-release-review.md)), tested by
-`tests/test_review.py`. It re-runs Select and Generate and blocks on any
-difference, checks the policies themselves, then lists its doubts, each with
-a risk and the question a person answers by accepting it.
+`tests/test_review.py`. It re-runs Select, Generate and Verify and blocks on
+any difference, checks the policies themselves, then lists its doubts, each
+with a risk and the question a person answers by accepting it. Proofs come
+only from its own run of Verify, so all 10 Private Preview denies are proved
+without anyone supplying evidence.
 
 At Private Preview, with no evidence supplied, the run **holds**:
 
 | Doubts | Risk | Status at Moderate (ceiling Low) |
 |---|---|---|
-| No proof, and no impact replay, for each of the 6 organization-wide denies | High | needs a person (12) |
-| No proof for each of Athena's 4 denies (no impact replay needed: nobody uses Athena yet) | Medium | needs a person (4) |
+| No impact replay for each of the 6 organization-wide denies (Athena's own need none: nobody uses Athena yet) | High | needs a person (6) |
 | Inferred High or Critical severity (9 controls), evaluator not calibrated, break-glass trust policies unchecked | Medium | needs a person (11) |
+| The security spec isn't signed off; accepted risks AR-01, AR-02, AR-03 and AR-05 aren't signed off | Medium | needs a person (5) |
 | Enforce on inferred mappings only (10 controls), detective artifacts pending | Low | accepted by the reviewer (11) |
 
-With proof, impact and calibration evidence for every statement (synthetic
-in the tests, since no stage produces it yet), what is left is judgement:
-the severities and break-glass. Once a person other than the maker accepts
-those, the run **releases**. The next run releases on its own while nothing
-changes; opening a region brings back only the two doubts about ORG-C-01's
-changed statement. The promotion to Contained adds doubts for the lifted
+With impact and calibration evidence for every statement (synthetic in the
+tests, since no stage produces it yet), what is left is judgement: the
+severities, break-glass, the spec and its accepted risks. Once a person other
+than the maker accepts those, the run **releases**. The next run releases on
+its own while nothing changes. Opening a region changes ORG-C-01's statement:
+Verify proves it again on its own, and only its impact replay comes back to a
+person. Findings that weaken a guardrail (a Spark action dropped from
+ATH-C-03) are reproduced faithfully by Select and Generate, and blocked by the
+proof. The promotion to Contained adds doubts for the lifted
 preview restriction (ATH-C-01 retired), the trusted resource account, the
 supervision controls nothing enforces yet (F11), and impact replays for
 Athena's own denies. Any edited file, failed proof or unexpected Allow
@@ -275,7 +285,7 @@ Athena's own denies. Any edited file, failed proof or unexpected Allow
 | F10 | **The preview restriction must retire on promotion**, but the spec says tiers are cumulative. | Implemented | `until_tier` on a candidate: the control applies until that tier, and the next tier's `selection.json` lists it as retired. |
 | F11 | Most supervision controls are Enforce with override with no guardrail. "Override" then only means the Sentinel soft-mandatory path. | Open | Confirm this is the intended meaning for configuration controls. |
 | F12 | **Break-glass exemptions could be matched or created by an attacker.** A wildcard account matched roles outside the organization (RCP bypass), and nothing stopped a member creating a `BreakGlass-*` role. | Fixed | Break-glass and exception principals must be role ARNs in a 12-digit account. New shared control ORG-C-04 denies the IAM role changes (and `iam:PassRole`) on every exempt role to everyone but break-glass. |
-| F13 | **ATH-C-03's deny list was hand-picked** and missed two Spark actions. | Fixed | Every capability action in the contract is classified in `action-review.json` (pending security review); the guardrail denies the reviewed list. |
+| F13 | **ATH-C-03's deny list was hand-picked** and missed two Spark actions. | Fixed | Every capability action in the contract is classified in `onboard/specs/athena-action-review.json` (pending security review); the guardrail denies the reviewed list. |
 | F14 | **Break-glass could move data out of the organization**: it was exempt from the S3 resource perimeter (ORG-C-02). Its reach is set by trust policies the tool doesn't check. | Fixed, pending sign-off | Guardrails can set `break_glass_exempt: false`; the data perimeter (ORG-C-02, ORG-C-03) does. Checking break-glass trust policies is open. |
 | F15 | **The organization's VPC endpoints let data leave with someone else's credentials.** No SCP or RCP applies to an outside principal writing to an outside resource, and the endpoints carried AWS's default full-access policy. | Fixed for traffic through the endpoints | A baseline endpoint policy (ORG-C-05, ORG-C-06) on every endpoint; named exceptions in `trusted_resource_accounts`. Traffic around the endpoints is AR-05: a network control. |
 
@@ -288,9 +298,10 @@ Athena's own denies. Any edited file, failed proof or unexpected Allow
   root and Athena's at the account.
 - **Assess:** the candidates are hand-written. The Control Catalog and
   Security Hub lookups and the verification pass are not built.
-- **Unattended release:** the review is built, but no stage produces proof,
-  impact or calibration evidence yet, acceptances aren't authenticated, and no
-  pipeline deploys on `release` (ADR-0005).
+- **Unattended release:** the review and Verify are built, but no stage
+  produces impact or calibration evidence yet, the spec and accepted risks
+  aren't signed off, acceptances aren't authenticated, and no pipeline deploys
+  on `release` (ADR-0005, ADR-0006).
 - **Validate:** gates are asserted in tests, but `validation.json`,
   `report.md`, approvals and the manifest aren't produced.
 - **Level 2 end-state tests:** no disposable test account yet.
@@ -313,6 +324,8 @@ python3 -m onboard resolve  tests/fixtures/athena/request-private-preview.json -
 python3 -m onboard select   tests/fixtures/athena/request-private-preview.json \
   --findings tests/fixtures/athena/findings.json --out runs/athena-pp
 python3 -m onboard generate tests/fixtures/athena/request-private-preview.json --run runs/athena-pp
+python3 -m onboard verify   tests/fixtures/athena/request-private-preview.json --run runs/athena-pp
+python3 -m onboard review   tests/fixtures/athena/request-private-preview.json --run runs/athena-pp
 ```
 
 For a promotion, put the previous run's `registry.json` into the next

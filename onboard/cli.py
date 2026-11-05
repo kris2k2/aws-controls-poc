@@ -14,6 +14,7 @@ from .generate import GenerateError, generate
 from .request import RequestError, parse_request
 from .resolve import ResolveError, resolve
 from .review import ACCEPTANCES_SCHEMA, EVIDENCE_SCHEMA, load_optional, load_run, review
+from .verify import VerifyError, contract_actions, verify
 from .select import SelectError, select
 from .service_reference import INDEX_URL, ServiceReference, SourceError, check_url, http_fetch
 
@@ -108,6 +109,33 @@ def cmd_generate(args) -> int:
     return 0
 
 
+def cmd_verify(args) -> int:
+    request = _load_request(args.request)
+    run = Path(args.run)
+    findings = load_findings(_read_json(run / "findings.json"))
+    controls = {p.stem: _read_json(p) for p in sorted((run / "controls").glob("*.json"))}
+    policies = {p.stem: _read_json(p) for p in sorted((run / "org-policies").glob("*.json"))}
+    if not policies:
+        raise VerifyError(f"{run / 'org-policies'} holds no policies: run generate first")
+    profile_path = run / "capability-profile.json"
+    if not profile_path.exists():
+        raise VerifyError(f"{profile_path} is missing: run resolve into the run first")
+    contract = contract_actions(_read_json(profile_path), findings["service"])
+    result = verify(request, findings, controls, policies, contract)
+    _write_json(run / "verification.json", result)
+    passed = sum(p["result"] == "pass" for p in result["proofs"])
+    mutants = sum(p["mutants"]["caught"] for p in result["proofs"])
+    print(f"{result['result'].upper()}: {passed} of {len(result['proofs'])} statements proved against the "
+          f"{result['service']} security spec ({result['spec']['status']}), {mutants} mutants caught, "
+          f"{len(result['failures'])} failures; wrote {run / 'verification.json'}")
+    for failure in result["failures"]:
+        print(f"  failure: {failure}")
+    for proof in result["proofs"]:
+        if proof["result"] == "fail":
+            print(f"  {proof['policy']}/{proof['sid']}: {proof['detail']}")
+    return 0 if result["result"] == "pass" else 4
+
+
 # Exit codes for `review`, so a pipeline can gate on them.
 REVIEW_EXIT = {"release": 0, "hold": 3, "blocked": 4}
 
@@ -116,9 +144,10 @@ def cmd_review(args) -> int:
     request = _load_request(args.request)
     run = Path(args.run)
     files, problems = load_run(run)
-    evidence_path = Path(args.evidence) if args.evidence else run / "evidence.json"
-    evidence = load_optional(evidence_path if evidence_path.exists() or args.evidence else None,
-                             EVIDENCE_SCHEMA, problems)
+    paths = [Path(e) for e in args.evidence or []]
+    if not paths and (run / "evidence.json").exists():
+        paths = [run / "evidence.json"]
+    evidence = [doc for doc in (load_optional(p, EVIDENCE_SCHEMA, problems) for p in paths) if doc is not None]
     acceptances = load_optional(Path(args.acceptances) if args.acceptances else None, ACCEPTANCES_SCHEMA, problems)
     result = review(request, files, evidence=evidence, acceptances=acceptances,
                     catalog=load_index(Path(args.catalog)), load_problems=tuple(problems))
@@ -180,11 +209,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run", required=True, help="run directory written by select")
     p.set_defaults(func=cmd_generate)
 
+    p = sub.add_parser("verify", help="Verify stage: prove each guardrail against its security property and "
+                                      "write verification.json (exit 0 pass, 4 fail)")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--run", required=True, help="run directory written by resolve, select and generate")
+    p.set_defaults(func=cmd_verify)
+
     p = sub.add_parser("review", help="Review stage: decide whether the run may be released without a person "
                                       "(exit 0 release, 3 hold, 4 blocked)")
     p.add_argument("request", help="request JSON file")
     p.add_argument("--run", required=True, help="run directory written by generate")
-    p.add_argument("--evidence", help="verification evidence (default: evidence.json in the run, if present)")
+    p.add_argument("--evidence", action="append",
+                   help="impact or calibration evidence (evidence/v1); repeatable "
+                        "(default: evidence.json in the run, if present)")
     p.add_argument("--acceptances", help="human acceptances of earlier doubts (acceptances/v1)")
     p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
     p.set_defaults(func=cmd_review)
@@ -193,6 +230,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError,
-            CatalogError) as exc:
+            CatalogError, VerifyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

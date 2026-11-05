@@ -1,29 +1,39 @@
 """Adversarial tests for the generated Athena guardrails.
 
-Layers (see `tests/adversary.py` for the method and its limits):
-1. The security spec, `tests/athena_security_spec.py`: what each control must deny.
-2. The attacker model, `tests/adversary.Space`: what an attacker can vary.
+Layers (see `onboard/adversary.py` for the method and its limits):
+1. The security spec, `onboard/specs/`: what each control must deny.
+2. The attacker model, `onboard.adversary.Space`: what an attacker can vary.
 3. Bounded proof: each generated statement denies exactly what its property denies.
 4. Completeness against the API contract: every Athena action is reviewed.
 5. Exemption hygiene: no exemption an attacker can match or create.
 6. Mutation testing: every way of breaking a statement is caught.
 7. Accepted risks: the gaps left open on purpose stay exactly that wide.
 Plus a catalogue of named attacks, end to end through every policy.
+
+Layers 3 and 6 are what the Verify stage runs on every run (`onboard/verify.py`);
+the tests run them here directly, and check the Verify stage gives the same
+answers in `tests/test_verify.py`. Layers 5 and 7 and the named attacks need a
+test organization (an existing allow-list), so they stay here.
 """
 
-import re
 import unittest
 
+from onboard import adversary
+from onboard.adversary import (ANONYMOUS, EXTERNAL_ACCOUNT, ORG_ACCOUNT_ON_NO_LIST, STANDALONE_ACCOUNT, Facts, Space,
+                               role)
 from onboard.cli import snapshot_fetcher
 from onboard.controls import load_findings
-from onboard.model import Mode
 from onboard.resolve import resolve
 from onboard.service_reference import ServiceReference
-from tests import adversary
-from tests.adversary import (ANONYMOUS, EXTERNAL_ACCOUNT, ORG_ACCOUNT_ON_NO_LIST, STANDALONE_ACCOUNT, Facts, Space,
-                             role)
-from tests.athena_security_spec import ACCEPTED_RISKS, ACTION_REVIEW, BY_CONTROL, ROLE_CHANGES
+from onboard.specs import load_spec
+from onboard.specs.organization import ROLE_CHANGES
+from onboard.verify import active_controls
 from tests.test_athena_journey import BASELINE_ALLOW, ORG, OTHER, PREVIEW, SNAPSHOT, load, run_tier
+
+SPEC = load_spec("athena")
+BY_CONTROL = SPEC.by_control
+ACTION_REVIEW = SPEC.action_review
+ACCEPTED_RISKS = SPEC.accepted_risks
 
 EXCEPTION_ROLE = f"arn:aws:iam::{PREVIEW}:role/migration"
 EXCEPTION = {"principal": EXCEPTION_ROLE, "control_id": "ATH-H-06", "owner": "team-analytics",
@@ -58,17 +68,7 @@ class Scenario:
 
     def active(self):
         """Controls that must be preventive here, with the exceptions that apply to each."""
-        out = {}
-        for cid, record in self.controls.items():
-            if "guardrail" not in record:
-                continue
-            mode = Mode(record["mode"])
-            approved = tuple(e.principal for e in self.request.exceptions if e.control_id == cid)
-            if mode is Mode.ENFORCE:
-                out[cid] = ()
-            elif mode is Mode.ENFORCE_WITH_OVERRIDE and approved:
-                out[cid] = approved
-        return out
+        return active_controls(self.request, self.controls)
 
     def statement(self, cid):
         return self.statements.get(cid.replace("-", ""), (None, None))
@@ -152,14 +152,14 @@ class BoundedProofTest(AdversarialTestCase):
         sneaky = adversary.Property("ATH-C-04", "reads vpce undeclared", adversary.CONSTRAINS_PRINCIPALS,
                                     actions=("athena:*",), deny_when=lambda r, f: r.vpce is None)
         sc = self.scenarios["hardened"]
-        with self.assertRaisesRegex(AssertionError, "reads 'vpce' without declaring it"):
+        with self.assertRaisesRegex(adversary.ModelError, "reads 'vpce' without declaring it"):
             adversary.counterexamples(sc.statement("ATH-C-04")[1], sneaky, sc.space)
 
     def test_a_statement_reading_a_key_outside_the_model_fails(self):
         stmt = {"Sid": "X", "Effect": "Deny", "Action": "athena:*", "Resource": "*",
                 "Condition": {"StringEquals": {"aws:SourceIp": "192.0.2.1"}}}
         sc = self.scenarios["hardened"]
-        with self.assertRaisesRegex(AssertionError, "aws:SourceIp, which the attacker model doesn't vary"):
+        with self.assertRaisesRegex(adversary.ModelError, "aws:SourceIp, which the attacker model doesn't vary"):
             adversary.counterexamples(stmt, BY_CONTROL["ATH-C-04"], sc.space)
 
 
@@ -234,23 +234,9 @@ def _account_of(arn):
 
 
 # --- Layer 6: mutation testing ------------------------------------------------------
-# Mutants that change nothing the model can observe, so no test could catch
-# them. Each must keep surviving: if one starts being caught, drop it here.
-# Keys are (control, regular expression over the mutant's description).
-EQUIVALENT_MUTANTS = {
-    ("ORG-C-02", r"(drop BoolIfExists|change BoolIfExists to Bool on) aws:PrincipalIsAWSService"):
-        "SCPs never apply to AWS service principals, so the condition is always true where the SCP applies",
-    ("ORG-C-03", r"change BoolIfExists to Bool on aws:PrincipalIsAWSService"):
-        "the model always sets aws:PrincipalIsAWSService; calibration against AWS should confirm it is always present",
-    ("ATH-C-04", r"change BoolIfExists to Bool on aws:ViaAWSService"):
-        "the model always sets aws:ViaAWSService; calibration against AWS should confirm it is always present",
-    ("ATH-C-01", r"drop arn:aws:iam::111122223333:role/BreakGlass-\* from ArnNotLike aws:PrincipalArn"):
-        "111122223333 is the preview account, where ATH-C-01 denies nobody",
-}
-
-
-def equivalent(cid, description):
-    return next((key for key in EQUIVALENT_MUTANTS if key[0] == cid and re.fullmatch(key[1], description)), None)
+# Mutants that change nothing the model can observe are listed in the spec
+# (EQUIVALENT_MUTANTS) with the reason. Each must keep surviving: if one starts
+# being caught, or stops occurring, drop it there.
 
 
 class MutationTest(AdversarialTestCase):
@@ -264,7 +250,7 @@ class MutationTest(AdversarialTestCase):
                 for description, mutant in adversary.mutants(stmt):
                     total += 1
                     found = adversary.counterexamples(mutant, BY_CONTROL[cid], sc.space, exceptions, limit=1)
-                    key = equivalent(cid, description)
+                    key = SPEC.equivalent(cid, description, sc.facts)
                     if key:
                         seen.add(key)
                         caught.update([(key, name, description)] if found else [])
@@ -272,13 +258,13 @@ class MutationTest(AdversarialTestCase):
                     with self.subTest(scenario=name, control=cid, mutant=description):
                         self.assertTrue(found, "survived: the tests would not notice this bug")
         self.assertGreater(total, 150)  # the operators really ran
-        self.assertEqual(seen, set(EQUIVALENT_MUTANTS), "a listed equivalent mutant no longer occurs: drop it")
+        self.assertEqual(seen, set(SPEC.equivalent_mutants), "a listed equivalent mutant no longer occurs: drop it")
         self.assertEqual(caught, set(), "a listed equivalent mutant is caught now: drop it")
 
     def test_every_endpoint_allow_mutant_is_caught(self):
         sc = self.scenarios["hardened"]
         self.assertIsNotNone(sc.endpoint_allow, "no endpoint policy generated")
-        for description, mutant in adversary.endpoint_allow_mutants(sc.endpoint_allow):
+        for description, mutant in adversary.endpoint_allow_mutants(sc.endpoint_allow, ORG):
             with self.subTest(mutant=description):
                 self.assertTrue(adversary.endpoint_allow_counterexamples(mutant, sc.space, limit=1))
 
@@ -290,6 +276,35 @@ class MutationTest(AdversarialTestCase):
 
 
 # --- Layer 7: accepted risks --------------------------------------------------------
+# The register is in the spec (onboard/specs/). Each risk is pinned here, in the
+# test organization: per tier, a request that must stay allowed, and boundary
+# requests (overrides on adversary.default_point, Sid) that must stay denied.
+RISK_PINS = {
+    "AR-01": (("private-preview", "contained", "hardened"),
+              {"action": "athena:StartQueryExecution", "vpce": None, "via": True},
+              (({"action": "s3:PutObject", "vpce": None, "via": True, "resource_org": adversary.OTHER_ORG}, "ORGC02"),
+               ({"principal": "external", "action": "s3:GetObject", "vpce": None, "via": True}, "ORGC03"))),
+    "AR-02": (("private-preview", "contained", "hardened"),
+              {"action": "athena:CreateWorkGroup", "tag": "cc-0001"},
+              (({"action": "athena:StartSession"}, "ATHC03"),
+               ({"action": "athena:StartCalculationExecution"}, "ATHC03"))),
+    # The test organization's allow-list opens IAM, STS and Organizations reads, not CloudFront or Route 53.
+    "AR-03": (("private-preview", "contained", "hardened"),
+              {"action": "iam:ListRoles", "region": "us-west-2"},
+              (({"action": "athena:StartQueryExecution", "region": "us-west-2"}, "ORGC01"),)),
+    "AR-04": (("contained", "hardened"),
+              {"action": "cloudtrail:StopLogging", "principal": "break-glass"},
+              (({"action": "s3:PutObject", "principal": "break-glass", "resource_org": adversary.OTHER_ORG},
+                "ORGC02"),)),
+    "AR-05": (("private-preview", "contained", "hardened"),
+              {"principal": "external", "action": "s3:PutObject", "resource_org": adversary.OTHER_ORG, "vpce": None},
+              (({"principal": "external", "action": "s3:PutObject", "resource_org": adversary.OTHER_ORG,
+                 "vpce": "vpce-0example2222222222"}, "ORGC05"),
+               ({"principal": "anonymous", "action": "s3:PutObject", "resource_org": None,
+                 "vpce": "vpce-0example2222222222"}, "ORGC05"))),
+}
+
+
 class AcceptedRiskTest(AdversarialTestCase):
     def resolve(self, sc, overrides):
         overrides = dict(overrides)
@@ -301,19 +316,29 @@ class AcceptedRiskTest(AdversarialTestCase):
             overrides["principal"] = ANONYMOUS
         return overrides
 
-    def test_register_entries_are_complete(self):
+    def test_register_entries_are_complete_and_pinned(self):
         ids = [r.id for r in ACCEPTED_RISKS]
         self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(set(ids), set(RISK_PINS), "every accepted risk needs a pin here, and only those")
         for risk in ACCEPTED_RISKS:
             with self.subTest(risk=risk.id):
-                self.assertTrue(risk.risk and risk.why and risk.reach and risk.owner and risk.status and risk.tiers)
+                self.assertTrue(risk.risk and risk.why and risk.reach and risk.owner and risk.status)
                 self.assertLessEqual(set(risk.controls), set(BY_CONTROL))
+
+    def test_each_risk_applies_exactly_where_its_controls_are_preventive(self):
+        for risk in ACCEPTED_RISKS:
+            tiers = RISK_PINS[risk.id][0]
+            for tier in ("private-preview", "contained", "hardened"):
+                with self.subTest(risk=risk.id, tier=tier):
+                    active = set(risk.controls) & set(self.scenarios[tier].active())
+                    self.assertEqual(bool(active), tier in tiers)
 
     def test_each_accepted_gap_is_open_exactly_as_registered(self):
         for risk in ACCEPTED_RISKS:
-            for tier in risk.tiers:
+            tiers, request, _ = RISK_PINS[risk.id]
+            for tier in tiers:
                 sc = self.scenarios[tier]
-                overrides = self.resolve(sc, risk.request)
+                overrides = self.resolve(sc, request)
                 with self.subTest(risk=risk.id, tier=tier):
                     decision = sc.decide(**overrides)
                     self.assertTrue(decision.allowed, f"{risk.id} is closed now ({decision.statement}): "
@@ -326,9 +351,10 @@ class AcceptedRiskTest(AdversarialTestCase):
 
     def test_each_accepted_gap_stops_at_its_registered_boundary(self):
         for risk in ACCEPTED_RISKS:
-            for tier in risk.tiers:
+            tiers, _, boundary = RISK_PINS[risk.id]
+            for tier in tiers:
                 sc = self.scenarios[tier]
-                for overrides, sid in risk.boundary:
+                for overrides, sid in boundary:
                     with self.subTest(risk=risk.id, tier=tier, boundary=overrides.get("action")):
                         decision = sc.decide(**self.resolve(sc, overrides))
                         self.assertEqual((decision.allowed, decision.statement), (False, sid),
