@@ -17,7 +17,8 @@ FINDINGS_SCHEMA = "findings/v1"
 PLATFORMS = ("scp", "rcp", "vpce", "boundary", "config", "cloudtrail", "sentinel")
 DETECTIVE_PLATFORMS = ("config", "cloudtrail")
 STATUSES = ("planned", "not_expressible", "not_applicable")
-SEVERITY_SOURCES = ("security-hub", "rubric")
+# control-catalog: AWS's severity for the control, read by Assess (ADR-0007).
+SEVERITY_SOURCES = ("security-hub", "control-catalog", "rubric")
 MAPPING_TYPES = ("aws-mapped", "publisher-mapped", "inferred")
 VERIFICATIONS = ("verified", "unverifiable", "contradicted", "not-run")
 # vpce: a statement in the baseline policy on every VPC endpoint the organization runs.
@@ -28,7 +29,8 @@ CONDITION_OPERATORS = (
     "ArnLike", "ArnNotLike", "ArnLikeIfExists", "ArnNotLikeIfExists",
     "Bool", "BoolIfExists", "Null",
 )
-_CONTROL_ID = re.compile(r"^[A-Z]{2,5}-[A-Z]{1,3}-\d{2}$")
+# Three digits for Security Hub numbers above 99 (EC2.172 -> EC-SH-172).
+_CONTROL_ID = re.compile(r"^[A-Z]{2,5}-[A-Z]{1,3}-\d{2,3}$")
 _PARAMETER = re.compile(r"^\$\{([a-z_]+)\}$")
 
 

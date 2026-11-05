@@ -1,0 +1,626 @@
+{
+  "candidates": [
+    {
+      "blind_spots": [
+        "management account",
+        "service-linked roles"
+      ],
+      "citations": [
+        {
+          "anchor": "Region policy: enforced by an SCP deny on aws:RequestedRegion",
+          "retrieved": "2026-10-30",
+          "url": "spec:AWS Service Onboarding Tool Spec v0.1",
+          "verification": "not-run"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-01",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "sc-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "conditions": {
+          "StringNotEquals": {
+            "aws:RequestedRegion": "${allowed_regions}"
+          }
+        },
+        "not_actions": [
+          "iam:*",
+          "organizations:*",
+          "sts:*",
+          "route53:*",
+          "cloudfront:*",
+          "support:*"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "calls to non-global actions in other regions",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom: resources outside allowed regions",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "checks": "provider region and aliases",
+          "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
+        }
+      },
+      "objective": "region-containment",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Requests only in allowed regions"
+    },
+    {
+      "blind_spots": [
+        "AWS-owned buckets accessed by services"
+      ],
+      "citations": [
+        {
+          "anchor": "Data perimeter: organization principals reach only organization resources",
+          "retrieved": "2026-10-30",
+          "url": "spec:AWS Service Onboarding Tool Spec v0.1",
+          "verification": "not-run"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-02",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "sc-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "s3:*"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "BoolIfExists": {
+            "aws:PrincipalIsAWSService": "false"
+          },
+          "StringNotEqualsIfExists": {
+            "aws:ResourceAccount": "${trusted_resource_accounts}",
+            "aws:ResourceOrgID": "${org_id}"
+          }
+        },
+        "optional_parameters": [
+          "trusted_resource_accounts"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "denied S3 calls to resources outside the organization",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "the bucket owner of a query target isn't in the plan",
+          "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "the network-path counterpart is ORG-C-06, which binds every caller through the endpoints",
+          "status": "not_applicable"
+        }
+      },
+      "notes": "Services that write to S3 with the caller's permissions (Athena query results, UNLOAD and CTAS, for example) are contained by this perimeter. Break-glass is not exempt: the data perimeter holds for every principal, so a break-glass session can't move data out of the organization.",
+      "objective": "resource-perimeter",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Organization principals reach only organization S3 resources and named trusted accounts"
+    },
+    {
+      "blind_spots": [
+        "service-linked roles",
+        "AWS managed KMS keys"
+      ],
+      "citations": [
+        {
+          "anchor": "RCPs apply to actions for the following AWS services: ... Amazon S3 (prefix:s3) ... AWS Key Management Service (prefix:kms)",
+          "retrieved": "2026-10-30",
+          "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-03",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-3",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "s3:*",
+          "kms:*"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "BoolIfExists": {
+            "aws:PrincipalIsAWSService": "false"
+          },
+          "StringNotEqualsIfExists": {
+            "aws:PrincipalOrgID": "${org_id}"
+          }
+        },
+        "type": "rcp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "denied calls from principals outside the organization",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "s3-bucket-policy-grantee-check (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "status": "planned"
+        },
+        "scp": {
+          "reason": "no action-level deny",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
+        }
+      },
+      "notes": "A service that isn't RCP-supported is contained through the S3 and KMS resources it reads and writes. Break-glass is not exempt: the data perimeter holds for every principal, so a break-glass session can't move data out of the organization.",
+      "objective": "identity-perimeter",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Only organization principals reach S3 and KMS resources"
+    },
+    {
+      "blind_spots": [
+        "management account",
+        "roles created before the guardrail is attached"
+      ],
+      "citations": [],
+      "class": "Containment",
+      "control_id": "ORG-C-04",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-6.10",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-2.7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "iam:AttachRolePolicy",
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:DeleteRolePermissionsBoundary",
+          "iam:DeleteRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:PassRole",
+          "iam:PutRolePermissionsBoundary",
+          "iam:PutRolePolicy",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:UpdateRole",
+          "iam:UpdateRoleDescription"
+        ],
+        "resources": [
+          "${protected_roles}"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "any of the guarded IAM calls on a break-glass or exception role",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "role trust and permission changes are events, not configuration drift Config can judge",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "IAM is not an RCP-supported service",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "checks": "forbid Terraform changes to break-glass and exception roles",
+          "level": "hard-mandatory",
+          "status": "planned"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
+        }
+      },
+      "notes": "Every guardrail exempts break-glass principals, and Enforce-with-override guardrails exempt approved exceptions. The exemption matches on the role ARN, so it is only as strong as the protection of those roles: without this control, anyone allowed to create roles could create one with a break-glass name and skip every guardrail. IAM actions checked against the AWS service reference on 2026-11-05: each has the role as its resource.",
+      "objective": "privilege-escalation",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Only break-glass principals change or pass break-glass and exception roles"
+    },
+    {
+      "blind_spots": [
+        "traffic that bypasses the organization's endpoints (AR-05)",
+        "services whose endpoints don't support endpoint policies or these condition keys (verify per service)"
+      ],
+      "citations": [],
+      "class": "Containment",
+      "control_id": "ORG-C-05",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "sc-7",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "*"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "StringNotEqualsIfExists": {
+            "aws:PrincipalOrgID": "${org_id}"
+          }
+        },
+        "type": "vpce"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "not a permissions boundary control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom rule: every VPC endpoint carries the baseline endpoint policy (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "RCPs don't see requests to resources outside the organization",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "SCPs don't bind principals outside the organization",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
+          "level": "hard-mandatory",
+          "status": "planned"
+        },
+        "vpce": {
+          "status": "planned"
+        }
+      },
+      "notes": "SCPs bind only organization principals, so credentials from an outside account, or an unsigned request, could use the organization's endpoints to reach outside resources. The endpoint policy binds every caller. aws:PrincipalOrgID is absent for unsigned requests and standalone accounts, which the negated operator denies.",
+      "objective": "data-perimeter",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Only organization principals use the organization's VPC endpoints"
+    },
+    {
+      "blind_spots": [
+        "traffic that bypasses the organization's endpoints (AR-05)",
+        "services whose endpoints don't support endpoint policies or these condition keys (verify per service)"
+      ],
+      "citations": [],
+      "class": "Containment",
+      "control_id": "ORG-C-06",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "sc-7.10",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "*"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "StringNotEqualsIfExists": {
+            "aws:ResourceAccount": "${trusted_resource_accounts}",
+            "aws:ResourceOrgID": "${org_id}"
+          }
+        },
+        "optional_parameters": [
+          "trusted_resource_accounts"
+        ],
+        "type": "vpce"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "not a permissions boundary control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "calls denied by a VPC endpoint policy (the event names the endpoint)",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "custom rule: every VPC endpoint carries the baseline endpoint policy (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "RCPs don't see requests to resources outside the organization",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "reason": "ORG-C-02 covers S3 for organization principals; the endpoint covers every caller and every service",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "checks": "forbid aws_vpc_endpoint without the baseline endpoint policy",
+          "level": "hard-mandatory",
+          "status": "planned"
+        },
+        "vpce": {
+          "status": "planned"
+        }
+      },
+      "notes": "Fails closed: a resource in a standalone account has no aws:ResourceOrgID, and a call with no resource has neither key, so both are denied through the endpoint unless the account is named in trusted_resource_accounts. AWS-owned resources (package repositories, image layers) need their accounts named or that traffic breaks.",
+      "objective": "data-perimeter",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "The organization's VPC endpoints reach only organization resources and named trusted accounts"
+    },
+    {
+      "citations": [],
+      "class": "Supervision",
+      "control_id": "ORG-S-01",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "au-9",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "cloudtrail:StopLogging",
+          "cloudtrail:DeleteTrail",
+          "cloudtrail:UpdateTrail",
+          "cloudtrail:PutEventSelectors",
+          "cloudtrail:PutInsightSelectors"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "trail changes",
+          "status": "planned"
+        },
+        "config": {
+          "rule": "cloudtrail-enabled / multi-region-cloudtrail-enabled (verify per run)",
+          "status": "planned"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
+        }
+      },
+      "objective": "logging-tamper",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "CloudTrail can't be stopped or reconfigured"
+    },
+    {
+      "citations": [],
+      "class": "Supervision",
+      "control_id": "ORG-S-02",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "au-9",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "cm-8",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "config:StopConfigurationRecorder",
+          "config:DeleteConfigurationRecorder",
+          "config:DeleteDeliveryChannel"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "recorder changes",
+          "status": "planned"
+        },
+        "config": {
+          "reason": "not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "not a resource-side control",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
+        }
+      },
+      "objective": "detection-tamper",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Config recording can't be stopped"
+    }
+  ],
+  "how_to_use": "The shared ORG-* candidates Assess adds to every service's findings. They are reused through the control registry, so a change here changes every service's organization policies: it is a code change under CODEOWNERS, and its properties are in onboard/specs/organization.py.",
+  "schema": "organization-baseline/v1",
+  "status": "proposed: written with an AI coding agent from the reviewed Athena test case, pending security review"
+}

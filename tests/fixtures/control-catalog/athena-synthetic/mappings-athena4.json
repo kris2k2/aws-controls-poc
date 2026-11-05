@@ -1,0 +1,44 @@
+{
+  "ControlMappings": [
+    {
+      "ControlArn": "arn:aws:controlcatalog:::control/syntheticathena4",
+      "Mapping": {
+        "Framework": {
+          "Item": "AU-12",
+          "Name": "NIST-SP-800-53-r5"
+        }
+      },
+      "MappingType": "FRAMEWORK"
+    },
+    {
+      "ControlArn": "arn:aws:controlcatalog:::control/syntheticathena4",
+      "Mapping": {
+        "Framework": {
+          "Item": "AC-2(4)",
+          "Name": "NIST-SP-800-53-r5"
+        }
+      },
+      "MappingType": "FRAMEWORK"
+    },
+    {
+      "ControlArn": "arn:aws:controlcatalog:::control/syntheticathena4",
+      "Mapping": {
+        "Framework": {
+          "Item": "ZZ-99",
+          "Name": "NIST-SP-800-53-r5"
+        }
+      },
+      "MappingType": "FRAMEWORK"
+    },
+    {
+      "ControlArn": "arn:aws:controlcatalog:::control/syntheticathena4",
+      "Mapping": {
+        "Framework": {
+          "Item": "AU-12",
+          "Name": "FedRAMP-r4"
+        }
+      },
+      "MappingType": "FRAMEWORK"
+    }
+  ]
+}

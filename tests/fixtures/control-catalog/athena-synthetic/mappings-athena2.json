@@ -1,0 +1,14 @@
+{
+  "ControlMappings": [
+    {
+      "ControlArn": "arn:aws:controlcatalog:::control/syntheticathena2",
+      "Mapping": {
+        "Framework": {
+          "Item": "CM-8",
+          "Name": "NIST-SP-800-53-r5"
+        }
+      },
+      "MappingType": "FRAMEWORK"
+    }
+  ]
+}

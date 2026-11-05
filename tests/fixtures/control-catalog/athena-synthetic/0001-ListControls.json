@@ -1,0 +1,59 @@
+{
+  "Controls": [
+    {
+      "Aliases": [
+        "SH.Athena.4"
+      ],
+      "Arn": "arn:aws:controlcatalog:::control/syntheticathena4",
+      "Behavior": "DETECTIVE",
+      "CreateTime": 1700000000,
+      "Description": "Synthetic test entry for Athena.4.",
+      "GovernedResources": [
+        "AWS::Athena::WorkGroup"
+      ],
+      "Implementation": {
+        "Identifier": "Athena.4",
+        "Type": "AWS::SecurityHub::SecurityControl"
+      },
+      "Name": "Athena workgroups should have logging enabled",
+      "Severity": "MEDIUM"
+    },
+    {
+      "Aliases": [
+        "SH.S3.1"
+      ],
+      "Arn": "arn:aws:controlcatalog:::control/synthetics3a1",
+      "Behavior": "DETECTIVE",
+      "CreateTime": 1700000000,
+      "Description": "Synthetic test entry for S3.1.",
+      "GovernedResources": [
+        "AWS::S3::Bucket"
+      ],
+      "Implementation": {
+        "Identifier": "S3.1",
+        "Type": "AWS::SecurityHub::SecurityControl"
+      },
+      "Name": "Synthetic S3 control, which Assess must leave out of Athena's findings",
+      "Severity": "MEDIUM"
+    },
+    {
+      "Aliases": [
+        "SH.Athena.2"
+      ],
+      "Arn": "arn:aws:controlcatalog:::control/syntheticathena2",
+      "Behavior": "DETECTIVE",
+      "CreateTime": 1700000000,
+      "Description": "Synthetic test entry for Athena.2.",
+      "GovernedResources": [
+        "AWS::Athena::DataCatalog"
+      ],
+      "Implementation": {
+        "Identifier": "Athena.2",
+        "Type": "AWS::SecurityHub::SecurityControl"
+      },
+      "Name": "Athena data catalogs should be tagged",
+      "Severity": "LOW"
+    }
+  ],
+  "NextToken": "synthetic-page-2"
+}
