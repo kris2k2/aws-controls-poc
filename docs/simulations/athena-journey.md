@@ -303,9 +303,12 @@ Athena's own denies. Any edited file, failed proof or unexpected Allow
   - ORG-C-03, ORG-C-05, ORG-C-06 and ATH-S-04 (Config)
   - ORG-C-04, ORG-C-05 and ORG-C-06 (Sentinel)
   - permissions boundaries.
-- **Compose:** placement per OU level, budgets across all services, and the
-  diff against `org_state`. The tests place organization policies at the
-  root and Athena's at the account.
+- **Compose:** built ([ADR-0011](../adr/0011-compose-stage.md)). At Private
+  Preview Athena's allow-list goes on `Root`, `Sandbox`, `Sandbox/Preview`
+  and the preview account, and its guardrails on that account. On promotion
+  both move to `Workloads/Analytics`, and Review asks whether removing Athena
+  from the preview account is intended. `org_state` is declared in the
+  request, not read from AWS Organizations.
 - **Assess:** built for the baseline, the preview restriction and Security
   Hub controls from the Control Catalog ([ADR-0007](../adr/0007-assess-from-the-control-catalog.md)).
   From assessed findings (`tests/fixtures/athena/overlay.json` and a

@@ -24,7 +24,8 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 | Review | Partial: a deterministic release decision (release, hold or blocked) from a reproduction check, its own run of Verify, checks on the policies, statement-bound impact and calibration evidence, and fingerprinted human acceptances ([ADR-0005](docs/adr/0005-risk-based-release-review.md)). No stage produces impact or calibration evidence yet, so runs hold |
 | Run · Deliver | Done: `onboard run` takes a request through every stage; on release, Deliver re-runs Review and writes a sealed bundle (the reviewed policies and detective artifacts, their evidence and a hashed manifest) that `onboard check-delivery` checks ([ADR-0008](docs/adr/0008-run-and-sealed-delivery.md)). Deploys nothing |
 | Report | Done: `report.html` at the end of every run, held and blocked included: the service, its threat vectors with their coverage, accepted risks and blind spots, the implemented guardrails with their proofs, and the release review; self-contained, no scripts, sealed in the delivery bundle ([ADR-0010](docs/adr/0010-visual-service-report.md)) |
-| 5. Compose · 6. Validate | Not started; a local SCP/RCP evaluator backs the Level 1 guardrail tests, including the adversarial suite: a bounded proof of each guardrail against a reviewed security spec, plus mutation testing ([ADR-0003](docs/adr/0003-adversarial-verification-of-guardrails.md)) |
+| 5. Compose | Done: places every policy in the OU tree from `org_state` (allow-list on every level to each target and below it, guardrails on the targets, organization guardrails on the root), checks AWS Organizations' quotas across every service's attachments, and diffs against `org_state` in a safe apply order; Review reproduces it and blocks over budget ([ADR-0011](docs/adr/0011-compose-stage.md)). `org_state` is declared, not read from AWS |
+| 6. Validate | Not started; a local SCP/RCP evaluator backs the Level 1 guardrail tests, including the adversarial suite: a bounded proof of each guardrail against a reviewed security spec, plus mutation testing ([ADR-0003](docs/adr/0003-adversarial-verification-of-guardrails.md)) |
 
 Initial test case: [Athena from Private Preview to Hardened](docs/simulations/athena-journey.md).
 
@@ -55,6 +56,7 @@ python3 -m onboard assess request.json --run runs/bedrock --overlay overlay.json
 python3 -m onboard assess request.json --run runs/bedrock --control-catalog-snapshot snapshots/control-catalog  # offline
 python3 -m onboard select request.json --findings runs/bedrock/findings.json --out runs/bedrock
 python3 -m onboard generate request.json --run runs/bedrock  # org-policies/ and detective/ (Config, EventBridge, Sentinel)
+python3 -m onboard compose request.json --run runs/bedrock  # composition.json: placement, quotas, diff against org_state; exit 0 fits, 4 over budget
 python3 -m onboard verify request.json --run runs/bedrock  # needs the service's spec in onboard/specs/ (Athena so far) and resolve's output in the run; exit 0 pass, 4 fail
 python3 -m onboard review request.json --run runs/bedrock --acceptances acceptances.json  # exit 0 release, 3 hold, 4 blocked
 python3 -m onboard deliver request.json --run runs/bedrock --acceptances acceptances.json  # reviews again; on release writes runs/bedrock/delivery
@@ -70,7 +72,8 @@ A minimal request (synthetic values):
   "maturity_tier": "Private Preview",
   "preview_accounts": ["111122223333"],
   "non_production_attested": true,
-  "org_state": {},
+  "org_state": {"organization_id": "o-exampleorgid", "ous": [{"path": "Sandbox"}],
+                "accounts": [{"id": "111122223333", "ou": "Sandbox"}], "policies": []},
   "maker": "analyst-a",
   "checker": "analyst-b"
 }
@@ -82,6 +85,11 @@ that allows only `controlcatalog:ListControls` and
 `controlcatalog:ListControlMappings`. The overlay (`findings-overlay/v1`) holds
 the analyst's candidates for the service; `assessment.json` lists what Assess
 left to the analyst.
+
+`org_state` is the organization as it stands: OU paths (parents first),
+accounts and their OU, and every attached SCP and RCP with its targets
+(`Root`, an OU path or an account ID) and its document or SHA-256. Compose
+places the policies in it and diffs against it ([ADR-0011](docs/adr/0011-compose-stage.md)).
 
 Keep real requests, org state and run outputs out of the repository.
 

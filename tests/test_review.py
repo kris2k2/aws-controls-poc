@@ -57,7 +57,7 @@ class RunCase(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
 
-    def build(self, tier="private-preview", name=None, findings=None, **overrides):
+    def build(self, tier="private-preview", name=None, findings=None, compose_exit=0, **overrides):
         data = load(f"request-{tier}.json")
         data.update(overrides)
         if tier != "private-preview" and "control_registry" not in data:
@@ -75,6 +75,7 @@ class RunCase(unittest.TestCase):
             self.assertEqual(main(["select", str(request_path), "--findings", str(findings_path),
                                    "--out", str(run)]), 0)
             self.assertEqual(main(["generate", str(request_path), "--run", str(run)]), 0)
+            self.assertEqual(main(["compose", str(request_path), "--run", str(run)]), compose_exit)
         return request_path, run
 
     def review(self, request_path, run, **kwargs):
@@ -270,6 +271,19 @@ class BlockerTest(RunCase):
         doubt = self.doubts(result)["unexercised-artifacts:detective"]
         self.assertEqual((doubt["risk"], doubt["status"]), ("Low", "auto-accepted"))  # Moderate's ceiling is Low
 
+    def test_an_edited_or_missing_composition_is_blocked(self):
+        self.edit(self.run / "composition.json", lambda d: d["placements"]["scp-athena-guardrails"].update(targets=[]))
+        self.assertBlocked(self.review(self.request_path, self.run), "reproducible", "composition.json")
+        (self.run / "composition.json").unlink()
+        self.assertBlocked(self.review(self.request_path, self.run), "complete")
+
+    def test_an_over_budget_composition_is_blocked(self):
+        org = load("request-private-preview.json")["org_state"]
+        org["policies"] += [{"name": f"rcp-x{i}", "type": "rcp", "sha256": "e" * 64, "targets": ["Root"]}
+                            for i in range(4)]
+        request_path, run = self.build(name="crowded", org_state=org, compose_exit=4)
+        self.assertBlocked(self.review(request_path, run), "budget", "composition.json")
+
     def test_a_missing_artifact_is_blocked(self):
         (self.run / "generation.json").unlink()
         result = self.review(self.request_path, self.run)
@@ -342,6 +356,8 @@ class JourneyReviewTest(RunCase):
         self.assertEqual(result["decision"], "hold")
         open_ = self.doubts(result, "needs acceptance")
         self.assertIn("retired:ATH-C-01", open_)  # the preview-account restriction is lifted
+        # Moving Athena to its target OU takes it away from the preview account.
+        self.assertEqual(open_["removes-service:athena"]["risk"], "Medium")
         self.assertIn("trusted-accounts:resource-accounts", open_)
         # Enforce with override and no exception deploys nothing (F11): a person decides if that is acceptable.
         self.assertIn("unenforced:ATH-S-01", open_)

@@ -18,6 +18,7 @@ from .control_catalog import (REGION as CATALOG_REGION, ControlCatalog, http_tra
                               snapshot_metadata, snapshot_transport)
 from .controls import FindingsError, load_findings
 from .deliver import DeliverError, check_delivery, deliver, manifest_sha256
+from .compose import ComposeError, compose
 from .generate import GenerateError, generate
 from .report import ReportError, load as load_report, render as render_report
 from .request import RequestError, parse_request
@@ -183,6 +184,24 @@ def cmd_verify(args) -> int:
     return 0 if result["result"] == "pass" else 4
 
 
+def cmd_compose(args) -> int:
+    request = _load_request(args.request)
+    run = Path(args.run)
+    generation = _read_json(run / "generation.json")
+    policies = {p.stem: _read_json(p) for p in sorted((run / "org-policies").glob("*.json"))}
+    result = compose(request, generation, policies)
+    _write_json(run / "composition.json", result)
+    changes = sum(d["change"] != "unchanged" for d in result["diff"]["policies"])
+    print(f"{result['result'].upper()}: {len(result['placements'])} organization policies placed "
+          f"({result['strategy']} organization), {changes} policy changes and "
+          f"{len(result['diff']['attachments'])} attachment changes; wrote {run / 'composition.json'}")
+    for problem in result["problems"]:
+        print(f"  over budget: {problem}")
+    if result["removes_service_from"]:
+        print(f"  removes {result['service']} from: {', '.join(result['removes_service_from'])}")
+    return 0 if result["result"] == "fits" else 4
+
+
 # Exit codes for `review`, so a pipeline can gate on them.
 REVIEW_EXIT = {"release": 0, "hold": 3, "blocked": 4}
 
@@ -268,7 +287,7 @@ class RunError(ValueError):
 
 # Files and directories the pipeline writes into a run, so a re-run starts clean.
 RUN_OUTPUTS = ("capability-profile.json", "findings.json", "assessment.json", "selection.json", "registry.json",
-               "generation.json", "verification.json", "review.json", "run.json", "report.html")
+               "generation.json", "composition.json", "verification.json", "review.json", "run.json", "report.html")
 RUN_OUTPUT_DIRS = ("controls", "org-policies", "detective", "delivery")
 
 
@@ -302,6 +321,7 @@ def cmd_run(args) -> int:
         ("select", cmd_select, Namespace(**common, findings=str(run / "findings.json"), out=str(run))),
         ("generate", cmd_generate, Namespace(request=args.request, run=str(run))),
         ("verify", cmd_verify, Namespace(request=args.request, run=str(run))),
+        ("compose", cmd_compose, Namespace(request=args.request, run=str(run))),
         ("review and deliver", cmd_deliver, Namespace(**common, run=str(run), evidence=args.evidence,
                                                       acceptances=args.acceptances, delivery=None)),
     )
@@ -427,6 +447,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("bundle", help="delivery bundle directory")
     p.set_defaults(func=cmd_check_delivery)
 
+    p = sub.add_parser("compose", help="Compose stage: place the policies in the organization, check its quotas "
+                                       "and diff it against org_state; writes composition.json (exit 0 fits, "
+                                       "4 over budget)")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--run", required=True, help="run directory written by generate")
+    p.set_defaults(func=cmd_compose)
+
     p = sub.add_parser("report", help="Report: write report.html, a visual summary of the service, its threat "
                                       "vectors and implemented guardrails, from a run directory")
     p.add_argument("--run", required=True, help="run directory written by select and generate (and verify, review)")
@@ -434,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("run", help="the whole cycle for one service: resolve, assess, select, generate, verify, "
-                                   "review and deliver (exit 0 delivered, 3 hold, 4 blocked or failed proof)")
+                                   "compose, review and deliver (exit 0 delivered, 3 hold, 4 blocked or failed proof)")
     p.add_argument("request", help="request JSON file")
     p.add_argument("--out", required=True, help="run directory: new, empty, or one `onboard run` wrote (re-run clean)")
     p.add_argument("--snapshot", help="read the service reference from this directory instead of AWS")
@@ -451,6 +478,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError,
-            CatalogError, VerifyError, AssessError, DeliverError, RunError, ReportError) as exc:
+            CatalogError, VerifyError, AssessError, DeliverError, RunError, ReportError, ComposeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
