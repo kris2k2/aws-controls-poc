@@ -1,0 +1,153 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Test organization (ADR-0013): the log archive bucket, in the log-archive account. Receives the organization CloudTrail trail and every account's AWS Config delivery. Deployed by org_bootstrap.py as stack org-bootstrap-log-archive.",
+  "Parameters": {
+    "BucketName": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$",
+      "Description": "Log archive bucket name (org_bootstrap.py derives it from the account and region)."
+    },
+    "OrganizationId": {
+      "Type": "String",
+      "AllowedPattern": "^o-[a-z0-9]{10,32}$"
+    },
+    "ManagementAccountId": {
+      "Type": "String",
+      "AllowedPattern": "^[0-9]{12}$"
+    },
+    "TrailName": {
+      "Type": "String",
+      "AllowedPattern": "^[A-Za-z0-9._-]{3,128}$"
+    },
+    "TrailRegion": {
+      "Type": "String",
+      "AllowedValues": ["ca-central-1", "us-east-1"],
+      "Description": "Home region of the organization trail."
+    },
+    "RetentionDays": {
+      "Type": "Number",
+      "MinValue": 30,
+      "MaxValue": 3650,
+      "Description": "Days log objects are kept. Impact replay (ADR-0012) needs at least 30."
+    }
+  },
+  "Resources": {
+    "LogBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketName": {"Ref": "BucketName"},
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {"ServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]
+        },
+        "VersioningConfiguration": {"Status": "Enabled"},
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "expire-logs",
+              "Status": "Enabled",
+              "ExpirationInDays": {"Ref": "RetentionDays"},
+              "NoncurrentVersionExpiration": {"NoncurrentDays": 30},
+              "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}
+            }
+          ]
+        }
+      }
+    },
+    "LogBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {"Ref": "LogBucket"},
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {"Fn::GetAtt": ["LogBucket", "Arn"]},
+                {"Fn::Sub": "${LogBucket.Arn}/*"}
+              ],
+              "Condition": {"Bool": {"aws:SecureTransport": "false"}}
+            },
+            {
+              "Sid": "DenyLogDeletion",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion"],
+              "Resource": {"Fn::Sub": "${LogBucket.Arn}/*"}
+            },
+            {
+              "Sid": "CloudTrailAclCheck",
+              "Effect": "Allow",
+              "Principal": {"Service": "cloudtrail.amazonaws.com"},
+              "Action": "s3:GetBucketAcl",
+              "Resource": {"Fn::GetAtt": ["LogBucket", "Arn"]},
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:cloudtrail:${TrailRegion}:${ManagementAccountId}:trail/${TrailName}"}
+                }
+              }
+            },
+            {
+              "Sid": "CloudTrailWrite",
+              "Effect": "Allow",
+              "Principal": {"Service": "cloudtrail.amazonaws.com"},
+              "Action": "s3:PutObject",
+              "Resource": [
+                {"Fn::Sub": "${LogBucket.Arn}/AWSLogs/${ManagementAccountId}/*"},
+                {"Fn::Sub": "${LogBucket.Arn}/AWSLogs/${OrganizationId}/*"}
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "s3:x-amz-acl": "bucket-owner-full-control",
+                  "aws:SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:cloudtrail:${TrailRegion}:${ManagementAccountId}:trail/${TrailName}"}
+                }
+              }
+            },
+            {
+              "Sid": "ConfigRecorderBucketCheck",
+              "Effect": "Allow",
+              "Principal": {"AWS": "*"},
+              "Action": ["s3:GetBucketAcl", "s3:ListBucket"],
+              "Resource": {"Fn::GetAtt": ["LogBucket", "Arn"]},
+              "Condition": {
+                "StringEquals": {"aws:PrincipalOrgID": {"Ref": "OrganizationId"}},
+                "ArnLike": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::*:role/org-bootstrap/org-bootstrap-config-recorder-*"}}
+              }
+            },
+            {
+              "Sid": "ConfigRecorderWriteOwnAccount",
+              "Effect": "Allow",
+              "Principal": {"AWS": "*"},
+              "Action": "s3:PutObject",
+              "Resource": {"Fn::Sub": "${LogBucket.Arn}/AWSLogs/${!aws:PrincipalAccount}/Config/*"},
+              "Condition": {
+                "StringEquals": {"aws:PrincipalOrgID": {"Ref": "OrganizationId"}},
+                "ArnLike": {"aws:PrincipalArn": {"Fn::Sub": "arn:${AWS::Partition}:iam::*:role/org-bootstrap/org-bootstrap-config-recorder-*"}}
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "BucketName": {"Value": {"Ref": "LogBucket"}},
+    "BucketArn": {"Value": {"Fn::GetAtt": ["LogBucket", "Arn"]}}
+  }
+}

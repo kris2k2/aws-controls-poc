@@ -1,0 +1,51 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Test organization (ADR-0013): the organization-wide AWS Config aggregator and IAM Access Analyzer (external access, organization zone of trust), in the audit account, the delegated administrator for both. Deployed by org_bootstrap.py as stack org-bootstrap-audit.",
+  "Parameters": {
+    "AggregatorRegions": {
+      "Type": "CommaDelimitedList",
+      "Description": "Regions where member accounts record AWS Config."
+    }
+  },
+  "Resources": {
+    "AggregatorRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "org-bootstrap-config-aggregator",
+        "Path": "/org-bootstrap/",
+        "Description": "AWS Config organization aggregator (ADR-0013).",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"Service": "config.amazonaws.com"},
+              "Action": "sts:AssumeRole",
+              "Condition": {"StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}}
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {"Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSConfigRoleForOrganizations"}
+        ]
+      }
+    },
+    "OrganizationAggregator": {
+      "Type": "AWS::Config::ConfigurationAggregator",
+      "Properties": {
+        "ConfigurationAggregatorName": "org-bootstrap",
+        "OrganizationAggregationSource": {
+          "RoleArn": {"Fn::GetAtt": ["AggregatorRole", "Arn"]},
+          "AwsRegions": {"Ref": "AggregatorRegions"}
+        }
+      }
+    },
+    "OrganizationAnalyzer": {
+      "Type": "AWS::AccessAnalyzer::Analyzer",
+      "Properties": {
+        "AnalyzerName": "org-bootstrap",
+        "Type": "ORGANIZATION"
+      }
+    }
+  }
+}

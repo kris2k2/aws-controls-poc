@@ -18,3 +18,6 @@
 # credentialed client (ADR-0007).
 /onboard/baseline/                           @kris2k2
 /onboard/control_catalog.py                  @kris2k2
+# The test organization's bootstrap: an administrator runs it with organization-wide
+# rights (ADR-0013).
+/infra/org-bootstrap/                        @kris2k2

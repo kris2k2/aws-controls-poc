@@ -29,6 +29,16 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 
 Initial test case: [Athena from Private Preview to Hardened](docs/simulations/athena-journey.md).
 
+## Test organization
+
+[`infra/org-bootstrap/`](infra/org-bootstrap/README.md) turns a fresh AWS
+account into the test organization the controls will be validated against:
+all features, SCP/RCP/tag policy types, the OU tree from the Athena
+journey's `org_state`, four member accounts, centralized root access, an
+organization trail and AWS Config into a log archive account, and the audit
+account as delegated administrator ([ADR-0013](docs/adr/0013-test-organization-bootstrap.md)).
+An administrator runs it from CloudShell; it deploys no SCPs or RCPs.
+
 ## Usage
 
 Requires Python 3.13 or later. There are no third-party dependencies.
