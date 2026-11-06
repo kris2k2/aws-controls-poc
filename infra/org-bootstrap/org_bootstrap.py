@@ -58,6 +58,9 @@ ROOT_ACCESS_OPERATIONS = {
     "RootSessions": "enable-organizations-root-sessions",
 }
 TAG_KEYS = ("project", "env", "owner")
+MANAGEMENT_KEY = "management"  # the management account in identity_center.groups[].accounts
+USER_NAME = re.compile(r"^[\w+=,.@-]{1,128}$")
+START_URL = re.compile(r"^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 ERROR_CODE = re.compile(r"An error occurred \(([A-Za-z0-9_.]+)\)")
 
@@ -232,6 +235,8 @@ def validate_config(cfg: dict) -> None:
         need(name not in names, f"account name {name} listed twice")
         keys.append(key)
         names.append(name)
+    need(MANAGEMENT_KEY not in keys, f"{MANAGEMENT_KEY!r} is reserved for the management account")
+    _validate_identity_center(cfg.get("identity_center"), keys, need)
     need(cfg.get("log_archive_account") in keys, "log_archive_account must be an account key")
     need(cfg.get("audit_account") in keys, "audit_account must be an account key")
     need(cfg.get("log_archive_account") != cfg.get("audit_account"),
@@ -247,6 +252,54 @@ def validate_config(cfg: dict) -> None:
 
     if errors:
         raise BootstrapError("invalid configuration:\n  " + "\n  ".join(errors))
+
+
+def _validate_identity_center(ic: object, account_keys: List[str], need: Callable[[bool, str], None]) -> None:
+    if not isinstance(ic, dict):
+        need(False, "identity_center must be an object")
+        return
+    names: List[str] = []
+    suffixes: List[str] = []
+    for ps in ic.get("permission_sets", []):
+        name = ps.get("name")
+        need(isinstance(name, str) and bool(re.fullmatch(r"[\w+=,.-]{1,32}", name)), f"bad permission set name {name!r}")
+        need(isinstance(ps.get("description"), str) and 1 <= len(ps["description"]) <= 700,
+             f"permission set {name}: description must be 1-700 characters")
+        need(isinstance(ps.get("session_duration"), str)
+             and bool(re.fullmatch(r"PT([1-9]|1[0-2])H", ps["session_duration"])),
+             f"permission set {name}: session_duration must be PT1H to PT12H")
+        policies = ps.get("managed_policies")
+        need(isinstance(policies, list) and bool(policies) and all(
+            isinstance(p, str) and re.fullmatch(r"arn:aws:iam::aws:policy/[\w+=,./-]+", p) for p in policies),
+            f"permission set {name}: managed_policies must be AWS managed policy ARNs")
+        suffix = ps.get("profile_suffix")
+        need(isinstance(suffix, str) and bool(re.fullmatch(r"[a-z][a-z0-9-]{0,20}", suffix)),
+             f"permission set {name}: bad profile_suffix {suffix!r}")
+        need(name not in names, f"permission set {name} listed twice")
+        need(suffix not in suffixes, f"profile_suffix {suffix} listed twice")
+        names.append(name)
+        suffixes.append(suffix)
+    need(bool(names), "identity_center needs at least one permission set")
+    groups: List[str] = []
+    for group in ic.get("groups", []):
+        name = group.get("name")
+        need(isinstance(name, str) and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}", name)),
+             f"bad group name {name!r}")
+        need(isinstance(group.get("description"), str) and bool(group["description"]),
+             f"group {name}: description required")
+        accounts = group.get("accounts")
+        need(accounts == "*" or (isinstance(accounts, list) and bool(accounts)
+                                 and set(accounts) <= set(account_keys) | {MANAGEMENT_KEY}),
+             f"group {name}: accounts must be \"*\" or account keys (or {MANAGEMENT_KEY!r})")
+        sets = group.get("permission_sets")
+        need(isinstance(sets, list) and bool(sets) and set(sets) <= set(names),
+             f"group {name}: permission_sets must be listed in identity_center.permission_sets")
+        need(name not in groups, f"group {name} listed twice")
+        groups.append(name)
+    need(ic.get("admins_group") in groups, "identity_center.admins_group must be one of its groups")
+    for field in ("cli_session_name", "cli_profile_prefix"):
+        need(isinstance(ic.get(field), str) and bool(re.fullmatch(r"[a-z][a-z0-9-]{1,30}", ic[field])),
+             f"identity_center.{field} must be lowercase letters, digits and dashes")
 
 
 def account_email(template: str, key: str) -> str:
@@ -265,6 +318,7 @@ def log_bucket_name(account_id: str, region: str) -> str:
 class Context:
     def __init__(self, cfg: dict, aws: Aws, apply: bool, *,
                  email_template: Optional[str] = None, budget_email: Optional[str] = None,
+                 admin_user: Optional[str] = None,
                  out: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep,
                  poll_interval: float = 10.0, max_polls: int = 180) -> None:
         self.cfg = cfg
@@ -272,6 +326,7 @@ class Context:
         self.apply = apply
         self.email_template = email_template
         self.budget_email = budget_email
+        self.admin_user = admin_user
         self.out = out
         self.sleep = sleep
         self.poll_interval = poll_interval
@@ -696,6 +751,249 @@ def step_audit(ctx: Context) -> None:
                  f"in account {account}", ctx.credentials_for(account))
 
 
+# --- IAM Identity Center: permission sets, groups, assignments, CLI profiles -----
+
+def _ic_targets(ctx: Context, group: dict) -> List[Tuple[str, str]]:
+    """(label, account ID) for a group's accounts; "*" is every account, management first."""
+    keys = group["accounts"]
+    if keys == "*":
+        keys = [MANAGEMENT_KEY] + [a["key"] for a in ctx.cfg["accounts"]]
+    management = ctx.org["MasterAccountId"]
+    return [(key, management if key == MANAGEMENT_KEY else ctx.account_ids[key]) for key in keys]
+
+
+def identity_center_instance(ctx: Context) -> Optional[dict]:
+    management = ctx.org["MasterAccountId"]
+    instances = [i for i in ctx.aws.call("sso-admin", "list-instances").get("Instances", [])
+                 if i.get("OwnerAccountId", management) == management]
+    if len(instances) > 1:
+        raise BootstrapError(f"{len(instances)} IAM Identity Center instances found; expected one")
+    if instances and instances[0].get("Status", "ACTIVE") != "ACTIVE":
+        raise BootstrapError(f"IAM Identity Center is {instances[0]['Status'].lower()}; wait until it is active")
+    return instances[0] if instances else None
+
+
+def _ic_wait(ctx: Context, what: str, operation: str, params: dict, key: str) -> None:
+    def check() -> Optional[dict]:
+        status = ctx.aws.call("sso-admin", operation, params)[key]
+        if status["Status"] == "FAILED":
+            raise BootstrapError(f"{what} failed: {status.get('FailureReason', 'unknown reason')}")
+        return status if status["Status"] == "SUCCEEDED" else None
+
+    ctx.poll(what, check)
+
+
+def _ic_permission_sets(ctx: Context, step: str, instance_arn: str) -> Dict[str, Optional[str]]:
+    existing: Dict[str, dict] = {}
+    for arn in ctx.aws.call("sso-admin", "list-permission-sets", {"InstanceArn": instance_arn}).get("PermissionSets", []):
+        ps = ctx.aws.call("sso-admin", "describe-permission-set",
+                          {"InstanceArn": instance_arn, "PermissionSetArn": arn})["PermissionSet"]
+        existing[ps["Name"]] = ps
+    result: Dict[str, Optional[str]] = {}
+    for want in ctx.cfg["identity_center"]["permission_sets"]:
+        name = want["name"]
+        ps = existing.get(name)
+        if ps is None:
+            ctx.changed(step, f"create permission set {name} ({want['session_duration']}, "
+                              f"{', '.join(p.rsplit('/', 1)[-1] for p in want['managed_policies'])})")
+            if not ctx.apply:
+                result[name] = None
+                continue
+            arn = ctx.aws.call("sso-admin", "create-permission-set", {
+                "InstanceArn": instance_arn, "Name": name, "Description": want["description"],
+                "SessionDuration": want["session_duration"], "Tags": ctx.tag_list(),
+            })["PermissionSet"]["PermissionSetArn"]
+            for policy in want["managed_policies"]:
+                ctx.aws.call("sso-admin", "attach-managed-policy-to-permission-set",
+                             {"InstanceArn": instance_arn, "PermissionSetArn": arn, "ManagedPolicyArn": policy})
+            result[name] = arn
+            continue
+
+        # An existing set (e.g. AdministratorAccess made in the console, README step 3) is adopted.
+        arn = ps["PermissionSetArn"]
+        result[name] = arn
+        ref = {"InstanceArn": instance_arn, "PermissionSetArn": arn}
+        updated = False
+        if ps.get("SessionDuration") != want["session_duration"] or ps.get("Description", "") != want["description"]:
+            ctx.changed(step, f"update permission set {name}: session {want['session_duration']}, description")
+            updated = True
+            if ctx.apply:
+                ctx.aws.call("sso-admin", "update-permission-set", {
+                    **ref, "SessionDuration": want["session_duration"], "Description": want["description"]})
+        attached = {p["Arn"] for p in ctx.aws.call(
+            "sso-admin", "list-managed-policies-in-permission-set", ref).get("AttachedManagedPolicies", [])}
+        for policy in want["managed_policies"]:
+            if policy in attached:
+                continue
+            ctx.changed(step, f"attach {policy} to permission set {name}")
+            updated = True
+            if ctx.apply:
+                ctx.aws.call("sso-admin", "attach-managed-policy-to-permission-set", {**ref, "ManagedPolicyArn": policy})
+        extras = sorted(attached - set(want["managed_policies"]))
+        if extras:
+            ctx.out(f"[{step}] warning: permission set {name} also has {', '.join(extras)}; "
+                    "not removed, review it in the console")
+        if ctx.aws.call("sso-admin", "get-inline-policy-for-permission-set", ref).get("InlinePolicy"):
+            ctx.out(f"[{step}] warning: permission set {name} has an inline policy; not removed, review it")
+        if not updated:
+            ctx.ok(step, f"permission set {name}")
+        elif ctx.apply:
+            request = ctx.aws.call("sso-admin", "provision-permission-set", {
+                **ref, "TargetType": "ALL_PROVISIONED_ACCOUNTS"})["PermissionSetProvisioningStatus"]["RequestId"]
+            _ic_wait(ctx, f"provisioning permission set {name}", "describe-permission-set-provisioning-status",
+                     {"InstanceArn": instance_arn, "ProvisionPermissionSetRequestId": request},
+                     "PermissionSetProvisioningStatus")
+    return result
+
+
+def _ic_groups(ctx: Context, step: str, store: str) -> Dict[str, Optional[str]]:
+    result: Dict[str, Optional[str]] = {}
+    for group in ctx.cfg["identity_center"]["groups"]:
+        try:
+            result[group["name"]] = ctx.aws.call("identitystore", "get-group-id", {
+                "IdentityStoreId": store,
+                "AlternateIdentifier": {"UniqueAttribute": {"AttributePath": "displayName",
+                                                            "AttributeValue": group["name"]}},
+            })["GroupId"]
+            ctx.ok(step, f"group {group['name']}")
+            continue
+        except AwsError as exc:
+            if exc.code != "ResourceNotFoundException":
+                raise
+        ctx.changed(step, f"create group {group['name']}")
+        result[group["name"]] = None
+        if ctx.apply:
+            result[group["name"]] = ctx.aws.call("identitystore", "create-group", {
+                "IdentityStoreId": store, "DisplayName": group["name"], "Description": group["description"],
+            })["GroupId"]
+    return result
+
+
+def _ic_assignments(ctx: Context, step: str, instance_arn: str, sets: Dict[str, Optional[str]],
+                    groups: Dict[str, Optional[str]]) -> None:
+    requests: List[Tuple[str, str]] = []
+    present = 0
+    for group in ctx.cfg["identity_center"]["groups"]:
+        group_id = groups[group["name"]]
+        for label, account_id in _ic_targets(ctx, group):
+            for set_name in group["permission_sets"]:
+                set_arn = sets[set_name]
+                if set_arn and group_id:
+                    assigned = ctx.aws.call("sso-admin", "list-account-assignments", {
+                        "InstanceArn": instance_arn, "AccountId": account_id, "PermissionSetArn": set_arn,
+                    }).get("AccountAssignments", [])
+                    if any(a["PrincipalType"] == "GROUP" and a["PrincipalId"] == group_id for a in assigned):
+                        present += 1
+                        continue
+                what = f"{set_name} on {label} ({account_id}) for group {group['name']}"
+                ctx.changed(step, f"assign {what}")
+                if ctx.apply:
+                    status = ctx.aws.call("sso-admin", "create-account-assignment", {
+                        "InstanceArn": instance_arn, "TargetId": account_id, "TargetType": "AWS_ACCOUNT",
+                        "PermissionSetArn": set_arn, "PrincipalType": "GROUP", "PrincipalId": group_id,
+                    })["AccountAssignmentCreationStatus"]
+                    requests.append((what, status["RequestId"]))
+    if present:
+        ctx.ok(step, f"{present} account assignments")
+    for what, request in requests:
+        _ic_wait(ctx, f"assigning {what}", "describe-account-assignment-creation-status",
+                 {"InstanceArn": instance_arn, "AccountAssignmentCreationRequestId": request},
+                 "AccountAssignmentCreationStatus")
+
+
+def _ic_membership(ctx: Context, step: str, store: str, groups: Dict[str, Optional[str]]) -> None:
+    group_name = ctx.cfg["identity_center"]["admins_group"]
+    try:
+        user_id = ctx.aws.call("identitystore", "get-user-id", {
+            "IdentityStoreId": store,
+            "AlternateIdentifier": {"UniqueAttribute": {"AttributePath": "userName",
+                                                        "AttributeValue": ctx.admin_user}},
+        })["UserId"]
+    except AwsError as exc:
+        if exc.code == "ResourceNotFoundException":
+            raise BootstrapError(f"no IAM Identity Center user named {ctx.admin_user}") from None
+        raise
+    group_id = groups[group_name]
+    if group_id:
+        try:
+            ctx.aws.call("identitystore", "get-group-membership-id",
+                         {"IdentityStoreId": store, "GroupId": group_id, "MemberId": {"UserId": user_id}})
+            ctx.ok(step, f"{ctx.admin_user} is in {group_name}")
+            return
+        except AwsError as exc:
+            if exc.code != "ResourceNotFoundException":
+                raise
+    ctx.changed(step, f"add {ctx.admin_user} to {group_name}")
+    if ctx.apply:
+        ctx.aws.call("identitystore", "create-group-membership",
+                     {"IdentityStoreId": store, "GroupId": group_id, "MemberId": {"UserId": user_id}})
+
+
+def step_identity_center(ctx: Context) -> None:
+    step = "identity-center"
+    instance = identity_center_instance(ctx)
+    if instance is None:
+        message = (f"IAM Identity Center isn't enabled for the organization in {ctx.home}; "
+                   "enable it in the console (README step 3)")
+        if ctx.apply:
+            raise BootstrapError(message)
+        ctx.out(f"[{step}] pending: {message}")
+        return
+    ctx.ok(step, f"instance {instance['IdentityStoreId']}")
+    sets = _ic_permission_sets(ctx, step, instance["InstanceArn"])
+    groups = _ic_groups(ctx, step, instance["IdentityStoreId"])
+    _ic_assignments(ctx, step, instance["InstanceArn"], sets, groups)
+    if ctx.admin_user:
+        _ic_membership(ctx, step, instance["IdentityStoreId"], groups)
+
+
+def render_sso_config(ctx: Context, start_url: Optional[str] = None) -> str:
+    """AWS CLI v2 profiles for every account and permission set the groups assign (read-only)."""
+    org = ctx.aws.call("organizations", "describe-organization")["Organization"]
+    if org.get("MasterAccountId") != ctx.caller_account:
+        raise BootstrapError("run sso-config from the management account")
+    ctx.org = org
+    by_name = {a["Name"]: a["Id"] for a in ctx.aws.call("organizations", "list-accounts")["Accounts"]}
+    missing = [a["name"] for a in ctx.cfg["accounts"] if a["name"] not in by_name]
+    ctx.account_ids = {a["key"]: by_name[a["name"]] for a in ctx.cfg["accounts"] if a["name"] in by_name}
+    instance = identity_center_instance(ctx)
+    if instance is None:
+        raise BootstrapError(f"IAM Identity Center isn't enabled in {ctx.home} (README step 3)")
+    url = start_url or f"https://{instance['IdentityStoreId']}.awsapps.com/start"
+    ic = ctx.cfg["identity_center"]
+    suffix = {ps["name"]: ps["profile_suffix"] for ps in ic["permission_sets"]}
+    order = [ps["name"] for ps in ic["permission_sets"]]
+    profiles: Dict[Tuple[str, str], Tuple[str, str]] = {}  # (key, set) -> (account ID, role)
+    for group in ic["groups"]:
+        keys = group["accounts"] if group["accounts"] != "*" else \
+            [MANAGEMENT_KEY] + [a["key"] for a in ctx.cfg["accounts"]]
+        for key in keys:
+            if key != MANAGEMENT_KEY and key not in ctx.account_ids:
+                continue
+            account_id = org["MasterAccountId"] if key == MANAGEMENT_KEY else ctx.account_ids[key]
+            for set_name in group["permission_sets"]:
+                profiles[(key, set_name)] = (account_id, set_name)
+
+    session = ic["cli_session_name"]
+    lines = [
+        "# AWS CLI v2 profiles for the aws-controls-poc test organization,",
+        "# generated by infra/org-bootstrap/org_bootstrap.py sso-config. Append to ~/.aws/config.",
+        f"# Sign in once:  aws sso login --sso-session {session}",
+        f"# Then switch:   aws sts get-caller-identity --profile {ic['cli_profile_prefix']}-audit-readonly",
+        f"# You need to be in the {ic['admins_group']} group in IAM Identity Center.",
+    ]
+    lines += [f"# Not created yet, no profile: {name}" for name in missing]
+    lines += ["", f"[sso-session {session}]", f"sso_start_url = {url}", f"sso_region = {ctx.home}",
+              "sso_registration_scopes = sso:account:access"]
+    account_order = [MANAGEMENT_KEY] + [a["key"] for a in ctx.cfg["accounts"]]
+    for key, set_name in sorted(profiles, key=lambda p: (account_order.index(p[0]), order.index(p[1]))):
+        account_id, role = profiles[(key, set_name)]
+        lines += ["", f"[profile {ic['cli_profile_prefix']}-{key}-{suffix[set_name]}]",
+                  f"sso_session = {session}", f"sso_account_id = {account_id}",
+                  f"sso_role_name = {role}", f"region = {ctx.home}", "output = json"]
+    return "\n".join(lines) + "\n"
+
+
 STEPS: List[Tuple[str, Callable[[Context], None]]] = [
     ("organization", step_organization),
     ("policy-types", step_policy_types),
@@ -708,6 +1006,7 @@ STEPS: List[Tuple[str, Callable[[Context], None]]] = [
     ("management", step_management),
     ("config", step_config),
     ("audit", step_audit),
+    ("identity-center", step_identity_center),
 ]
 
 ROOT_NEXT_STEPS = """\
@@ -734,17 +1033,27 @@ def run(ctx: Context) -> None:
             return
 
 
+def _stderr(text: str) -> None:
+    print(text, file=sys.stderr)
+
+
 def main(argv: Optional[List[str]] = None, *, runner: Runner = subprocess_runner,
          input_fn: Callable[[str], str] = input, out: Callable[[str], None] = print,
-         sleep: Callable[[float], None] = time.sleep) -> int:
+         err: Callable[[str], None] = _stderr, sleep: Callable[[float], None] = time.sleep) -> int:
     parser = argparse.ArgumentParser(
         prog="org_bootstrap.py", description="Bootstrap the test AWS organization (ADR-0013).")
-    parser.add_argument("command", choices=("plan", "apply"),
-                        help="plan: read-only, show what apply would change; apply: make the changes")
+    parser.add_argument("command", choices=("plan", "apply", "sso-config"),
+                        help="plan: read-only, show what apply would change; apply: make the changes; "
+                             "sso-config: print AWS CLI profiles for every account (read-only)")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="desired state (organization.json)")
     parser.add_argument("--email-template",
                         help="root email of new accounts, with {key} for the account key, e.g. aws+{key}@example.com")
     parser.add_argument("--budget-email", help="mailbox for budget alerts (required on the first apply)")
+    parser.add_argument("--admin-user",
+                        help="IAM Identity Center user name to add to the admins group (apply)")
+    parser.add_argument("--start-url",
+                        help="sso-config: the AWS access portal URL, if it isn't https://<identity store>.awsapps.com/start")
+    parser.add_argument("--out", type=Path, help="sso-config: write the profiles to this new file instead of stdout")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation before apply")
     args = parser.parse_args(argv)
 
@@ -754,11 +1063,26 @@ def main(argv: Optional[List[str]] = None, *, runner: Runner = subprocess_runner
             account_email(args.email_template, "check")
         if args.budget_email and not EMAIL.fullmatch(args.budget_email):
             raise BootstrapError("--budget-email is not an email address")
+        if args.admin_user and not USER_NAME.fullmatch(args.admin_user):
+            raise BootstrapError("--admin-user is not an IAM Identity Center user name")
+        if args.start_url and not START_URL.fullmatch(args.start_url):
+            raise BootstrapError("--start-url must be an https:// URL")
+        if args.out and args.out.exists():
+            raise BootstrapError(f"{args.out} exists; choose a new file (nothing is overwritten)")
         aws = Aws(cfg["home_region"], runner)
         aws.check_version()
         ctx = Context(cfg, aws, args.command == "apply", email_template=args.email_template,
-                      budget_email=args.budget_email, out=out, sleep=sleep)
+                      budget_email=args.budget_email, admin_user=args.admin_user, out=out, sleep=sleep)
         identify(ctx)
+        if args.command == "sso-config":
+            text = render_sso_config(ctx, args.start_url)
+            if args.out:
+                with open(args.out, "x", encoding="utf-8") as handle:
+                    handle.write(text)
+                err(f"Wrote {args.out}; append it to ~/.aws/config")
+            else:
+                out(text.rstrip("\n"))
+            return 0
         out(f"Caller: {ctx.caller_arn}")
         if ctx.apply and not args.yes:
             answer = input_fn(f"Apply the test organization from account {ctx.caller_account}? "
@@ -768,10 +1092,10 @@ def main(argv: Optional[List[str]] = None, *, runner: Runner = subprocess_runner
                 return 1
         run(ctx)
     except BootstrapError as exc:
-        out(f"error: {exc}")
+        err(f"error: {exc}")
         return 1
     except (KeyboardInterrupt, EOFError):
-        out("interrupted; re-run apply to resume")
+        err("interrupted; re-run apply to resume")
         return 1
     noun = "change" if ctx.changes == 1 else "changes"
     out(f"{ctx.changes} {noun} {'made' if ctx.apply else 'planned'}.")

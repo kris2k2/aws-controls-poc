@@ -71,7 +71,20 @@ Forces:
    that admits only the trail and the organization's recorder roles; roles
    on the bootstrap path trusting only their own account; every reference
    resolving.
-8. **No SCPs or RCPs**, no Security Hub or GuardDuty, no Control Tower.
+8. **IAM Identity Center is the only way in, and it's code too.** The
+   console enables the instance (no API does); the script then manages
+   `identity_center` in `organization.json` through the `sso-admin` and
+   `identitystore` APIs: permission sets `AdministratorAccess` (4 h) and
+   `ReadOnlyAccess` (8 h), AWS managed policies only; group
+   `controls-poc-admins`; and that group assigned both sets on every
+   account, management included. Access is granted to the group, never to
+   a user; `--admin-user` only adds a member. A set of the same name made
+   by hand is adopted; policies added by hand are reported, not removed.
+   `sso-config` writes AWS CLI v2 profiles (`sso-session`, one profile per
+   account and role) so one `aws sso login` reaches every account.
+   CloudFormation's `AWS::SSO::*` resources weren't used: assignments
+   multiply by account, and the accounts are only known at run time.
+9. **No SCPs or RCPs**, no Security Hub or GuardDuty, no Control Tower.
    The guardrails come from the tool; the paid detectors wait for Validate.
 
 ## Options considered
@@ -98,8 +111,12 @@ Forces:
   could stop that account's Config recorder; the trail and log bucket are
   out of their reach. See the
   [threat model](../threat-models/test-organization.md).
-- Privacy: account root emails and the budget mailbox are given at run
-  time and stored only in AWS.
+- Access: whoever is in `controls-poc-admins` administers every account,
+  the management account included, so membership is the control; MFA is
+  required at every sign-in. `ReadOnlyAccess` is there to make the safe
+  choice the easy one.
+- Privacy: account root emails, the budget mailbox and Identity Center user
+  names are given at run time and stored only in AWS.
 - Cost: no hourly resources; estimated under USD 5 a month idle, with a
   USD 25 budget alerting from 50 %.
 - Revisit when Validate needs Security Hub or GuardDuty, when a second

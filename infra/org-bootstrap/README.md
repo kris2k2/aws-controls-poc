@@ -41,6 +41,7 @@ IDs are filled in.
 | AWS Config | Every account, `ca-central-1`, daily recording, IAM types once | Detective artifacts (ADR-0009); daily keeps idle cost low |
 | Log retention | 365 days, versioned, deletes denied, TLS only | Evidence for impact replay; minimum 30 |
 | Budget | USD 25/month: alerts at 50 %, 80 %, 100 % actual and 100 % forecast | Cost standard |
+| IAM Identity Center | Permission sets `AdministratorAccess` (4 h) and `ReadOnlyAccess` (8 h); group `controls-poc-admins` assigned both on every account, management included | One sign-in, every account in the access portal and as CLI profiles ([switching accounts](#switching-between-accounts)) |
 
 Everything is tagged `project=aws-controls-poc`, `env=test`,
 `owner=aws-controls-poc-maintainers`. Stacks are named `org-bootstrap-*`,
@@ -88,10 +89,15 @@ used for more than it has to.
 
 1. IAM Identity Center → Enable, for the organization, in **ca-central-1**.
 2. Settings → Authentication: require MFA on every sign-in.
-3. Create a user for yourself, a permission set `AdministratorAccess`
-   (AWS managed policy, session of 1 to 4 hours) and assign it to the
-   management account.
-4. Sign out of the root user. Store its MFA device safely; you'll rarely
+3. Create a user for yourself (Users → Add user), a permission set
+   `AdministratorAccess` (Permission sets → Create → Predefined →
+   AdministratorAccess) and assign it to your user on the management
+   account. That's enough to run step 4, which takes the permission set
+   over (session 4 hours), adds `ReadOnlyAccess` and assigns both to the
+   `controls-poc-admins` group on every account.
+4. Note the **AWS access portal URL** (Dashboard → Settings summary); you'll
+   need it if you give the portal a custom alias.
+5. Sign out of the root user. Store its MFA device safely; you'll rarely
    need it again.
 
 ### 4. Bootstrap the rest (CloudShell, administrator)
@@ -103,8 +109,13 @@ Sign in through the access portal, open the management account with
 python3 org_bootstrap.py plan
 python3 org_bootstrap.py apply \
   --email-template 'aws+{key}@example.com' \
-  --budget-email 'aws-budget@example.com'
+  --budget-email 'aws-budget@example.com' \
+  --admin-user 'your-identity-center-user-name'
 ```
+
+`--admin-user` adds your Identity Center user to `controls-poc-admins`, so
+you get every account. Leave it out to manage group membership in the
+console instead.
 
 `apply` asks you to type the management account ID before it changes
 anything (`--yes` skips the prompt). It takes 15 to 30 minutes, mostly
@@ -119,9 +130,11 @@ next to your run outputs.
 
 ### 5. Finish in the console (administrator)
 
-1. **Identity Center:** assign permission sets to the member accounts as
-   needed, for example `ReadOnlyAccess` on the audit account and
-   `AdministratorAccess` on the preview and analytics accounts.
+1. **Identity Center:** reload the access portal: every account now shows
+   `AdministratorAccess` and `ReadOnlyAccess`. Then remove the direct
+   assignment from step 3 (AWS accounts → management account → your user),
+   so all access comes through the group. Set up the CLI as in
+   [Switching between accounts](#switching-between-accounts).
 2. **Cost allocation tags:** Billing → Cost allocation tags → activate
    `project`, `env` and `owner` (they appear about a day after the first
    tagged resource).
@@ -142,6 +155,53 @@ the governance CI bootstrap (`.governance/templates/aws/github-ci-bootstrap.yaml
 deployed by an administrator in that account as the
 [AWS CI bootstrap standard](../../.governance/standards/security/aws-ci-bootstrap.md)
 describes. That's per project, not part of this bootstrap.
+
+## Switching between accounts
+
+**In the browser:** the AWS access portal lists every account with its two
+roles; pick one to open the console there. Open several accounts side by
+side in separate browser profiles or containers.
+
+**On the command line** (AWS CLI v2, on your laptop): one sign-in covers every
+account. Generate the profiles in CloudShell, as an administrator:
+
+```sh
+python3 org_bootstrap.py sso-config --out controls-poc.aws-config
+# portal with a custom alias:  --start-url https://<alias>.awsapps.com/start
+```
+
+Download the file (Actions → Download file) and append it on your laptop:
+
+```sh
+cat controls-poc.aws-config >> ~/.aws/config
+aws sso login --sso-session controls-poc          # opens the browser, once per session
+aws sts get-caller-identity --profile controls-poc-audit-readonly
+```
+
+Profiles are named `controls-poc-<account>-<role>`:
+
+| Account | Admin | Read-only |
+|---|---|---|
+| management | `controls-poc-management-admin` | `controls-poc-management-readonly` |
+| log-archive | `controls-poc-log-archive-admin` | `controls-poc-log-archive-readonly` |
+| audit | `controls-poc-audit-admin` | `controls-poc-audit-readonly` |
+| preview | `controls-poc-preview-admin` | `controls-poc-preview-readonly` |
+| analytics | `controls-poc-analytics-admin` | `controls-poc-analytics-readonly` |
+
+Switch per command with `--profile`, or for the whole shell:
+
+```sh
+export AWS_PROFILE=controls-poc-preview-admin
+aws configure list-profiles | grep controls-poc   # everything you can switch to
+```
+
+Prefer `readonly` unless you're changing something. The token from
+`aws sso login` lasts for the Identity Center session (8 hours by default);
+each role session lasts its permission set's duration and is renewed
+silently while the token is valid. `aws sso logout` ends it. The file
+holds account IDs only, no credentials; keep it out of the repository.
+`sso-config` is read-only and never overwrites a file. Re-run it after
+adding an account or a permission set.
 
 ## Not included, on purpose
 
@@ -170,6 +230,10 @@ Adding a region to `config_regions` deploys the recorder there too; only
 | `AccessDenied` assuming `OrganizationAccountAccessRole` right after account creation | The new account is still being set up. Wait a few minutes and re-run `apply` |
 | A stack in `ROLLBACK_COMPLETE` | Read its events, fix the cause, delete the stack (turn off termination protection first) and re-run |
 | Config StackSet instance failed with "maximum number of configuration recorders" | Someone enabled Config in that account by hand; delete that recorder and re-run |
+| `IAM Identity Center isn't enabled ... in ca-central-1` | Enable it (step 3) in ca-central-1. An instance enabled in another region can't be moved: delete it and enable it again in ca-central-1 |
+| Creating the group fails | Your identity source is an external IdP (Entra ID, Okta), whose groups are provisioned by SCIM. Create `controls-poc-admins` there, let it sync, and re-run |
+| `aws sso login` works but a profile says `ForbiddenException` | You aren't in `controls-poc-admins` yet, or the assignment is still provisioning; check the access portal |
+| `warning: permission set ... also has ...` | Someone attached a policy by hand. The bootstrap doesn't remove it; review it in the console |
 
 ## Cost when idle
 

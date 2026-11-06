@@ -8,6 +8,7 @@ Account IDs and the organization ID are synthetic.
 from __future__ import annotations
 
 import ast
+import configparser
 import copy
 import importlib.util
 import json
@@ -26,6 +27,8 @@ ob = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ob)
 
 MANAGEMENT = "111122223333"
+INSTANCE_ARN = "arn:aws:sso:::instance/ssoins-1111222233334444"
+IDENTITY_STORE = "d-1234567890"
 ADMIN_ARN = f"arn:aws:sts::{MANAGEMENT}:assumed-role/AWSReservedSSO_AdministratorAccess_0123456789abcdef/analyst-a"
 ROOT_ARN = f"arn:aws:iam::{MANAGEMENT}:root"
 EMAILS = "aws+{key}@example.com"
@@ -45,7 +48,7 @@ class FakeCloud:
     """The subset of the AWS CLI the bootstrap uses, over one in-memory organization."""
 
     def __init__(self, *, organization: bool = True, caller_arn: str = ADMIN_ARN,
-                 master: str = MANAGEMENT, feature_set: str = "ALL") -> None:
+                 master: str = MANAGEMENT, feature_set: str = "ALL", identity_center: bool = True) -> None:
         self.caller_arn = caller_arn
         self.org = ({"Id": "o-exampleorgid", "MasterAccountId": master, "FeatureSet": feature_set}
                     if organization else None)
@@ -64,6 +67,15 @@ class FakeCloud:
         self.pending_accounts: dict = {}
         self.account_failure = None
         self.operation_failure = None
+        self.instance = ({"InstanceArn": INSTANCE_ARN, "IdentityStoreId": IDENTITY_STORE,
+                          "OwnerAccountId": master, "Status": "ACTIVE"} if identity_center else None)
+        self.permission_sets: dict = {}  # arn -> {"Name", "Description", "SessionDuration", "policies", "inline"}
+        self.provisioned: list = []
+        self.groups: dict = {}       # id -> {"DisplayName", "Description"}
+        self.users: dict = {}        # id -> user name
+        self.memberships: set = set()
+        self.assignments: set = set()  # (account, permission set arn, principal type, principal id)
+        self.sso_requests: dict = {}
         self.calls: list = []      # (service, operation, params, account, region)
         self.argvs: list = []
         self._n = 0
@@ -319,6 +331,140 @@ class FakeCloud:
         return {"StackSetOperation": {"Status": "SUCCEEDED" if done else "RUNNING"}}
 
 
+    # --- sso-admin and identitystore ------------------------------------------
+    def _ic(self, params, region):
+        assert region == "ca-central-1", "Identity Center lives in the home region"
+        if "InstanceArn" in params:
+            assert params["InstanceArn"] == INSTANCE_ARN
+
+    def console_permission_set(self, name="AdministratorAccess", duration="PT1H",
+                               policies=("arn:aws:iam::aws:policy/AdministratorAccess",), inline=""):
+        """A permission set made by hand in the console (README step 3), assigned to a user."""
+        arn = f"{INSTANCE_ARN}/ps-{self._next():016d}"
+        self.permission_sets[arn] = {"Name": name, "Description": "", "SessionDuration": duration,
+                                     "policies": set(policies), "inline": inline}
+        self.assignments.add((MANAGEMENT, arn, "USER", "user-console"))
+        return arn
+
+    def sso_admin__list_instances(self, region, **_):
+        self._ic({}, region)
+        return {"Instances": [dict(self.instance)] if self.instance else []}
+
+    def sso_admin__list_permission_sets(self, params, region, **_):
+        self._ic(params, region)
+        return {"PermissionSets": sorted(self.permission_sets)}
+
+    def sso_admin__describe_permission_set(self, params, region, **_):
+        self._ic(params, region)
+        ps = self.permission_sets[params["PermissionSetArn"]]
+        return {"PermissionSet": {"PermissionSetArn": params["PermissionSetArn"], "Name": ps["Name"],
+                                  "Description": ps["Description"], "SessionDuration": ps["SessionDuration"]}}
+
+    def sso_admin__create_permission_set(self, params, region, **_):
+        self._ic(params, region)
+        if any(ps["Name"] == params["Name"] for ps in self.permission_sets.values()):
+            raise FakeError("ConflictException", "permission set exists")
+        assert {t["Key"] for t in params["Tags"]} == {"project", "env", "owner"}
+        arn = f"{INSTANCE_ARN}/ps-{self._next():016d}"
+        self.permission_sets[arn] = {"Name": params["Name"], "Description": params["Description"],
+                                     "SessionDuration": params["SessionDuration"], "policies": set(), "inline": ""}
+        return {"PermissionSet": {"PermissionSetArn": arn, "Name": params["Name"]}}
+
+    def sso_admin__update_permission_set(self, params, region, **_):
+        self._ic(params, region)
+        self.permission_sets[params["PermissionSetArn"]].update(
+            SessionDuration=params["SessionDuration"], Description=params["Description"])
+
+    def sso_admin__list_managed_policies_in_permission_set(self, params, region, **_):
+        self._ic(params, region)
+        return {"AttachedManagedPolicies": [{"Arn": p, "Name": p.rsplit("/", 1)[-1]} for p in
+                                            sorted(self.permission_sets[params["PermissionSetArn"]]["policies"])]}
+
+    def sso_admin__attach_managed_policy_to_permission_set(self, params, region, **_):
+        self._ic(params, region)
+        self.permission_sets[params["PermissionSetArn"]]["policies"].add(params["ManagedPolicyArn"])
+
+    def sso_admin__get_inline_policy_for_permission_set(self, params, region, **_):
+        self._ic(params, region)
+        return {"InlinePolicy": self.permission_sets[params["PermissionSetArn"]]["inline"]}
+
+    def _sso_request(self, key):
+        request = f"req-{self._next()}"
+        self.sso_requests[request] = 0
+        return {key: {"RequestId": request, "Status": "IN_PROGRESS"}}
+
+    def _sso_status(self, request, key):
+        self.sso_requests[request] += 1
+        return {key: {"RequestId": request, "Status": "SUCCEEDED" if self.sso_requests[request] > 1 else "IN_PROGRESS"}}
+
+    def sso_admin__provision_permission_set(self, params, region, **_):
+        self._ic(params, region)
+        assert params["TargetType"] == "ALL_PROVISIONED_ACCOUNTS"
+        self.provisioned.append(params["PermissionSetArn"])
+        return self._sso_request("PermissionSetProvisioningStatus")
+
+    def sso_admin__describe_permission_set_provisioning_status(self, params, region, **_):
+        self._ic(params, region)
+        return self._sso_status(params["ProvisionPermissionSetRequestId"], "PermissionSetProvisioningStatus")
+
+    def sso_admin__list_account_assignments(self, params, region, **_):
+        self._ic(params, region)
+        return {"AccountAssignments": [
+            {"AccountId": a, "PermissionSetArn": p, "PrincipalType": t, "PrincipalId": i}
+            for a, p, t, i in sorted(self.assignments)
+            if a == params["AccountId"] and p == params["PermissionSetArn"]]}
+
+    def sso_admin__create_account_assignment(self, params, region, **_):
+        self._ic(params, region)
+        assert params["TargetType"] == "AWS_ACCOUNT" and params["PrincipalType"] == "GROUP"
+        assert params["TargetId"] == MANAGEMENT or params["TargetId"] in self.accounts
+        assert params["PrincipalId"] in self.groups and params["PermissionSetArn"] in self.permission_sets
+        self.assignments.add((params["TargetId"], params["PermissionSetArn"], "GROUP", params["PrincipalId"]))
+        return self._sso_request("AccountAssignmentCreationStatus")
+
+    def sso_admin__describe_account_assignment_creation_status(self, params, region, **_):
+        self._ic(params, region)
+        return self._sso_status(params["AccountAssignmentCreationRequestId"], "AccountAssignmentCreationStatus")
+
+    def _store(self, params, region):
+        assert region == "ca-central-1" and params["IdentityStoreId"] == IDENTITY_STORE
+
+    def identitystore__get_group_id(self, params, region, **_):
+        self._store(params, region)
+        attr = params["AlternateIdentifier"]["UniqueAttribute"]
+        assert attr["AttributePath"] == "displayName"
+        for gid, group in self.groups.items():
+            if group["DisplayName"] == attr["AttributeValue"]:
+                return {"GroupId": gid, "IdentityStoreId": IDENTITY_STORE}
+        raise FakeError("ResourceNotFoundException", "GROUP not found")
+
+    def identitystore__create_group(self, params, region, **_):
+        self._store(params, region)
+        gid = f"group-{self._next()}"
+        self.groups[gid] = {"DisplayName": params["DisplayName"], "Description": params["Description"]}
+        return {"GroupId": gid, "IdentityStoreId": IDENTITY_STORE}
+
+    def identitystore__get_user_id(self, params, region, **_):
+        self._store(params, region)
+        attr = params["AlternateIdentifier"]["UniqueAttribute"]
+        assert attr["AttributePath"] == "userName"
+        for uid, name in self.users.items():
+            if name == attr["AttributeValue"]:
+                return {"UserId": uid, "IdentityStoreId": IDENTITY_STORE}
+        raise FakeError("ResourceNotFoundException", "USER not found")
+
+    def identitystore__get_group_membership_id(self, params, region, **_):
+        self._store(params, region)
+        if (params["GroupId"], params["MemberId"]["UserId"]) in self.memberships:
+            return {"MembershipId": "m-1", "IdentityStoreId": IDENTITY_STORE}
+        raise FakeError("ResourceNotFoundException", "GROUP_MEMBERSHIP not found")
+
+    def identitystore__create_group_membership(self, params, region, **_):
+        self._store(params, region)
+        self.memberships.add((params["GroupId"], params["MemberId"]["UserId"]))
+        return {"MembershipId": "m-1", "IdentityStoreId": IDENTITY_STORE}
+
+
 def _parse_flags(args):
     flags: dict = {}
     current = None
@@ -339,7 +485,8 @@ def run_main(cloud, *argv, answer=None):
         prompts.append(prompt)
         return answer if answer is not None else ""
 
-    code = ob.main(list(argv), runner=cloud, input_fn=input_fn, out=lines.append, sleep=lambda _: None)
+    code = ob.main(list(argv), runner=cloud, input_fn=input_fn, out=lines.append, err=lines.append,
+                   sleep=lambda _: None)
     return code, "\n".join(lines), prompts
 
 
@@ -580,8 +727,147 @@ class GuardTest(unittest.TestCase):
     def test_aws_cli_v1_is_refused(self):
         def v1(argv, env):
             return 0, "", "aws-cli/1.29.0 Python/3.9\n"
-        code, out, _ = ob.main(["plan"], runner=v1, out=lambda _: None), None, None
+        code = ob.main(["plan"], runner=v1, out=lambda _: None, err=lambda _: None)
         self.assertEqual(code, 1)
+
+
+ADMIN = "arn:aws:iam::aws:policy/AdministratorAccess"
+READ_ONLY = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+
+
+class IdentityCenterTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = json.loads(CONFIG.read_text())
+        self.ic = self.cfg["identity_center"]
+
+    def sets_by_name(self, cloud):
+        return {ps["Name"]: (arn, ps) for arn, ps in cloud.permission_sets.items()}
+
+    def all_accounts(self, cloud):
+        return {MANAGEMENT} | set(cloud.accounts)
+
+    def test_permission_sets_group_and_assignments_on_every_account(self):
+        cloud = FakeCloud()
+        code, out, _ = apply_all(cloud)
+        self.assertEqual(code, 0, out)
+        sets = self.sets_by_name(cloud)
+        self.assertEqual(sets["AdministratorAccess"][1]["policies"], {ADMIN})
+        self.assertEqual(sets["AdministratorAccess"][1]["SessionDuration"], "PT4H")
+        self.assertEqual(sets["ReadOnlyAccess"][1]["policies"], {READ_ONLY})
+        [(group_id, group)] = cloud.groups.items()
+        self.assertEqual(group["DisplayName"], "controls-poc-admins")
+        expected = {(account, sets[name][0], "GROUP", group_id)
+                    for account in self.all_accounts(cloud) for name in ("AdministratorAccess", "ReadOnlyAccess")}
+        self.assertEqual(cloud.assignments, expected)
+        self.assertEqual(len(expected), 10)
+
+    def test_console_made_permission_set_is_adopted_not_duplicated(self):
+        cloud = FakeCloud()
+        arn = cloud.console_permission_set()
+        code, out, _ = apply_all(cloud)
+        self.assertEqual(code, 0, out)
+        names = [ps["Name"] for ps in cloud.permission_sets.values()]
+        self.assertEqual(names.count("AdministratorAccess"), 1)
+        self.assertEqual(cloud.permission_sets[arn]["SessionDuration"], "PT4H")
+        self.assertEqual(cloud.provisioned, [arn])  # the change reaches accounts already using it
+        self.assertIn((MANAGEMENT, arn, "USER", "user-console"), cloud.assignments)  # left alone
+
+    def test_extra_policies_are_reported_not_removed(self):
+        cloud = FakeCloud()
+        arn = cloud.console_permission_set(name="ReadOnlyAccess", duration="PT8H",
+                                           policies=(READ_ONLY, ADMIN), inline='{"Statement": []}')
+        cloud.permission_sets[arn]["Description"] = self.ic["permission_sets"][1]["description"]
+        code, out, _ = apply_all(cloud)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"warning: permission set ReadOnlyAccess also has {ADMIN}", out)
+        self.assertIn("inline policy", out)
+        self.assertEqual(cloud.permission_sets[arn]["policies"], {READ_ONLY, ADMIN})
+
+    def test_admin_user_is_added_to_the_admins_group(self):
+        cloud = FakeCloud()
+        cloud.users["user-1"] = "analyst-a"
+        code, out, _ = apply_all(cloud, "--admin-user", "analyst-a")
+        self.assertEqual(code, 0, out)
+        [group_id] = cloud.groups
+        self.assertEqual(cloud.memberships, {(group_id, "user-1")})
+        code, out, _ = run_main(cloud, "apply", "--yes", "--admin-user", "analyst-a")
+        self.assertIn("0 changes made.", out)
+
+    def test_unknown_admin_user_stops_the_run(self):
+        cloud = FakeCloud()
+        code, out, _ = apply_all(cloud, "--admin-user", "analyst-b")
+        self.assertEqual(code, 1)
+        self.assertIn("no IAM Identity Center user named analyst-b", out)
+
+    def test_identity_center_not_enabled(self):
+        cloud = FakeCloud(identity_center=False)
+        code, out, _ = run_main(cloud, "plan")
+        self.assertEqual(code, 0, out)
+        code, out, _ = apply_all(cloud)
+        self.assertEqual(code, 1)
+        self.assertIn("README step 3", out)
+        self.assertIn((MANAGEMENT, "ca-central-1", "org-bootstrap-management"), cloud.stacks)  # the rest is done
+        cloud.instance = {"InstanceArn": INSTANCE_ARN, "IdentityStoreId": IDENTITY_STORE,
+                          "OwnerAccountId": MANAGEMENT, "Status": "ACTIVE"}
+        code, out, _ = run_main(cloud, "plan")
+        self.assertIn("would: create permission set AdministratorAccess", out)
+
+    def sso_config(self, cloud, *extra):
+        lines: list = []
+        code = ob.main(["sso-config", *extra], runner=cloud, out=lines.append, err=lines.append,
+                       sleep=lambda _: None)
+        return code, "\n".join(lines)
+
+    def test_sso_config_has_a_profile_per_account_and_role(self):
+        cloud = FakeCloud()
+        self.assertEqual(apply_all(cloud)[0], 0)
+        before = len(cloud.calls)
+        code, text = self.sso_config(cloud)
+        self.assertEqual(code, 0, text)
+        self.assertEqual([o for _, o, *_ in cloud.calls[before:] if WRITE_OPS.match(o)], [])
+        parser = configparser.ConfigParser()
+        parser.read_string(text)
+        session = parser["sso-session controls-poc"]
+        self.assertEqual(session["sso_start_url"], f"https://{IDENTITY_STORE}.awsapps.com/start")
+        self.assertEqual(session["sso_region"], "ca-central-1")
+        profiles = {s: parser[s] for s in parser.sections() if s.startswith("profile ")}
+        keys = ["management"] + [a["key"] for a in self.cfg["accounts"]]
+        self.assertEqual(set(profiles), {f"profile controls-poc-{k}-{s}" for k in keys for s in ("admin", "readonly")})
+        audit = profiles["profile controls-poc-audit-readonly"]
+        self.assertEqual(audit["sso_account_id"], cloud.account_by_name("controls-poc-audit"))
+        self.assertEqual(audit["sso_role_name"], "ReadOnlyAccess")
+        self.assertEqual(audit["sso_session"], "controls-poc")
+        self.assertEqual(profiles["profile controls-poc-management-admin"]["sso_account_id"], MANAGEMENT)
+        # Every profile names an assignment that exists.
+        sets = {ps["Name"]: arn for arn, ps in cloud.permission_sets.items()}
+        for profile in profiles.values():
+            self.assertTrue(any(a == profile["sso_account_id"] and p == sets[profile["sso_role_name"]]
+                                for a, p, *_ in cloud.assignments), profile)
+
+    def test_sso_config_start_url_and_out_file(self):
+        cloud = FakeCloud()
+        self.assertEqual(apply_all(cloud)[0], 0)
+        code, text = self.sso_config(cloud, "--start-url", "https://controls-poc.awsapps.com/start")
+        self.assertIn("sso_start_url = https://controls-poc.awsapps.com/start", text)
+        code, text = self.sso_config(cloud, "--start-url", "https://x.example/start\n[profile evil]")
+        self.assertEqual(code, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "controls-poc.config"
+            code, text = self.sso_config(cloud, "--out", str(path))
+            self.assertEqual(code, 0, text)
+            self.assertIn("[sso-session controls-poc]", path.read_text())
+            code, text = self.sso_config(cloud, "--out", str(path))
+            self.assertEqual(code, 1)
+            self.assertIn("nothing is overwritten", text)
+
+    def test_sso_config_skips_accounts_not_created_yet(self):
+        cloud = FakeCloud()
+        cloud.add_account("controls-poc-audit")
+        code, text = self.sso_config(cloud)
+        self.assertEqual(code, 0, text)
+        self.assertIn("# Not created yet, no profile: controls-poc-preview", text)
+        self.assertIn("[profile controls-poc-audit-admin]", text)
+        self.assertNotIn("controls-poc-preview-admin", text)
 
 
 class ConfigTest(unittest.TestCase):
@@ -617,6 +903,16 @@ class ConfigTest(unittest.TestCase):
                            "delegated_admin_services entry needs trusted_access")
         self.assertInvalid(lambda c: c["policy_types"].remove("SERVICE_CONTROL_POLICY"), "SERVICE_CONTROL_POLICY")
         self.assertInvalid(lambda c: c["tags"].pop("owner"), "tags")
+        self.assertInvalid(lambda c: c["accounts"][0].update(key="management"), "reserved")
+        ic = "identity_center"
+        self.assertInvalid(lambda c: c[ic]["permission_sets"][0].update(session_duration="PT24H"), "PT12H")
+        self.assertInvalid(lambda c: c[ic]["permission_sets"][0].update(
+            managed_policies=["arn:aws:iam::111122223333:policy/Mine"]), "AWS managed")
+        self.assertInvalid(lambda c: c[ic]["groups"][0].update(permission_sets=["PowerUserAccess"]),
+                           "permission_sets must be listed")
+        self.assertInvalid(lambda c: c[ic]["groups"][0].update(accounts=["nowhere"]), "accounts must be")
+        self.assertInvalid(lambda c: c[ic].update(admins_group="someone-else"), "admins_group")
+        self.assertInvalid(lambda c: c[ic]["permission_sets"][1].update(profile_suffix="admin"), "twice")
 
 
 PSEUDO = {"AWS::AccountId", "AWS::Partition", "AWS::Region", "AWS::StackName", "AWS::URLSuffix",

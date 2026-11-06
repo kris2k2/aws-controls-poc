@@ -38,6 +38,35 @@
     "config-multiaccountsetup.amazonaws.com",
     "access-analyzer.amazonaws.com"
   ],
+  "identity_center": {
+    "permission_sets": [
+      {
+        "name": "AdministratorAccess",
+        "profile_suffix": "admin",
+        "description": "Full access, for administrators of the test organization",
+        "session_duration": "PT4H",
+        "managed_policies": ["arn:aws:iam::aws:policy/AdministratorAccess"]
+      },
+      {
+        "name": "ReadOnlyAccess",
+        "profile_suffix": "readonly",
+        "description": "Read-only access, for looking around without changing anything",
+        "session_duration": "PT8H",
+        "managed_policies": ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+      }
+    ],
+    "groups": [
+      {
+        "name": "controls-poc-admins",
+        "description": "Administrators of the aws-controls-poc test organization",
+        "accounts": "*",
+        "permission_sets": ["AdministratorAccess", "ReadOnlyAccess"]
+      }
+    ],
+    "admins_group": "controls-poc-admins",
+    "cli_session_name": "controls-poc",
+    "cli_profile_prefix": "controls-poc"
+  },
   "log_retention_days": 365,
   "trail_name": "org-bootstrap",
   "budget_monthly_limit_usd": 25

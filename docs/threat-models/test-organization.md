@@ -17,7 +17,9 @@ administrator's CloudShell.
 ## 1. What are we building?
 
 ```
-[Administrator] --console, MFA--> [IAM Identity Center] --AdministratorAccess--> [CloudShell, management account]
+[Administrator] --console or CLI (aws sso login), MFA--> [IAM Identity Center] --group controls-poc-admins--> any account
+                                                                                   (AdministratorAccess or ReadOnlyAccess)
+[Administrator] --AdministratorAccess--> [CloudShell, management account]
        |                                                                              |
        +--root user, MFA, once: create the organization                               |
                                                                                       v
@@ -43,6 +45,7 @@ CI, which must never manage the bootstrap's stacks or roles.
 | Data | Classification | Stored where | Retention |
 |---|---|---|---|
 | Account root emails, budget mailbox | personal if a person's address; use role mailboxes | Command line at apply time; AWS Organizations and the budget | Life of the organization; never in the repository |
+| Identity Center user name given to `--admin-user` | personal if it's a person's name or email | Command line; Identity Center | Life of the user |
 | Account IDs, organization ID | internal | Terminal output, AWS | Never in the repository |
 | Temporary credentials for member accounts | secret | Memory of the script and the CLI child process's environment | One hour (role chaining limit) |
 | CloudTrail logs, Config history | internal (may hold identifiers of the test organization's users) | Log archive bucket, `ca-central-1` | 365 days (configurable, at least 30) |
@@ -63,6 +66,9 @@ CI, which must never manage the bootstrap's stacks or roles.
 | **I**nformation disclosure | Yes | Emails or account IDs end up in the repository | The configuration rejects any `@`; emails come from the command line; IDs are read from AWS and printed only; the PII scan runs on every commit | Done |
 | **D**enial of service | Yes | Runaway cost in a test account (denial of wallet) | Monthly budget with alerts at 50/80/100 % and 100 % forecast; no hourly resources; daily Config recording | Done |
 | **E**levation of privilege | Yes | Whoever controls the management account controls every account (`OrganizationAccountAccessRole` trusts it) | Nothing runs in the management account but this bootstrap; administrators come from Identity Center with MFA; delegated administration keeps security tooling in the audit account | Accepted for a test organization |
+| **E**levation of privilege | Yes | Someone added to `controls-poc-admins` (or a stolen session) administers every account | Access is granted only to the group, so membership is the one place to review; MFA on every sign-in; sessions of 4 h (admin) and 8 h (read-only); `--admin-user` needs the typed confirmation like every apply; the trail records every assignment and membership change | Done; membership review is a person's job |
+| **E**levation of privilege | Low | A permission set is widened by hand (extra managed or inline policy) | Each apply reports any policy the configuration doesn't list; it never silently keeps or removes it | Done (tests) |
+| **I**nformation disclosure | Low | The generated CLI configuration leaks | It holds the portal URL and account IDs, no credentials; tokens stay in the CLI's own cache; `sso-config` never overwrites a file | Done (tests) |
 | **E**levation of privilege | Yes | Service-managed StackSets run with organization-wide permissions | Only the management account creates them; project CI's boundary blocks StackSets; the one StackSet deploys the reviewed Config template | Done |
 | **E**levation of privilege | Low | The Config recorder role is abused to write elsewhere | It trusts only `config.amazonaws.com` for its own account (`aws:SourceAccount`) and may write only its own prefix in the log bucket | Done (tests) |
 
