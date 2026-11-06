@@ -33,7 +33,8 @@ CHECKER = "analyst-b"
 def evidence_for(policies, result="pass", calibration=True):
     """Synthetic passing impact evidence for every deny in the policies, and calibration."""
     items = [{"kind": "impact", "policy": name, "sid": stmt["Sid"], "statement_sha256": sha256(stmt),
-              "result": result, "source": "synthetic: test", "detail": "test"}
+              "result": result, "source": "synthetic: test", "detail": "test",
+              "window": {"start": "2026-08-01T00:00:00+00:00", "end": "2026-11-01T00:00:00+00:00", "days": 92}}
              for name, stmt in deny_statements(policies)]
     if calibration:
         items.append({"kind": "calibration", "evaluator_sha256": EVALUATOR_SHA256, "result": "pass",
@@ -108,7 +109,10 @@ class DecisionTest(RunCase):
         self.assertIn("break-glass:principals", open_)
         self.assertEqual(len(result["acceptance_template"]["acceptances"]), len(open_))
         # The numbers in docs/simulations/athena-journey.md, section 6.
-        self.assertEqual(result["counts"], {"needs acceptance": 22, "accepted": 0, "auto-accepted": 12})
+        # Nine inferred severities on containment controls aren't asked: containment is Enforce whatever
+        # the severity, so the answer would change nothing.
+        self.assertEqual(result["counts"], {"needs acceptance": 13, "accepted": 0, "auto-accepted": 12})
+        self.assertFalse([d for d in open_ if d.startswith("inferred-severity:")])
 
     def test_without_the_api_contract_nothing_is_proved(self):
         request_path, run = self.build()
@@ -168,10 +172,10 @@ class DecisionTest(RunCase):
         evidence = evidence_for(files["policies"])
         first = self.review(request_path, run, evidence=evidence)
         self.assertEqual(first["decision"], "hold")
-        # With proofs, impact replays and calibration, what is left is judgement: severities, break-glass,
-        # the security spec and its accepted risks.
+        # With proofs, impact replays and calibration, what is left is judgement: break-glass, the security
+        # spec and its accepted risks (Private Preview's severities can't change a containment control's mode).
         self.assertEqual({d["kind"] for d in self.doubts(first, "needs acceptance").values()},
-                         {"inferred-severity", "break-glass", "security-spec", "accepted-risk"})
+                         {"break-glass", "security-spec", "accepted-risk"})
         result = self.review(request_path, run, evidence=evidence, acceptances=accept_all(first))
         self.assertEqual(result["decision"], "release")
         self.assertIsNone(result["residual_risk"])

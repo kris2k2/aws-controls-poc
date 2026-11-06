@@ -37,9 +37,10 @@ from pathlib import Path
 from . import __version__, evaluator
 from .catalog import load_index
 from .compose import ComposeError, compose
+from .impact import MIN_WINDOW_DAYS
 from .controls import GUARDRAIL_TYPES, FindingsError, load_findings
 from .generate import ENDPOINT_BASE_ALLOW, MAX_POLICY_CHARS, GenerateError, generate, policy_size, text_sha256
-from .model import Criticality, Mode, _Ordered
+from .model import ControlClass, Criticality, Mode, Severity, Tier, _Ordered, mode_by_criticality
 from .request import OnboardingRequest
 from .select import SelectError, select
 from .verify import VerifyError, contract_actions, deny_statements, sha256, verify
@@ -226,6 +227,12 @@ def _evidence_index(evidence: list[dict], proofs: list[dict], problems: list[str
                 problems.append(f"{where} is a proof: proofs come only from the reviewer's own run of Verify; "
                                 "ignored")
                 continue
+            if item["kind"] == "impact" and not (isinstance(item.get("window"), dict)
+                                                 and isinstance(item["window"].get("days"), (int, float))
+                                                 and item["window"]["days"] >= MIN_WINDOW_DAYS):
+                problems.append(f"{where} replays less than {MIN_WINDOW_DAYS} days of activity (window.days); "
+                                "ignored")
+                continue
             binding = item.get("evaluator_sha256") if item["kind"] == "calibration" else item.get("statement_sha256")
             index.setdefault((item["kind"], binding), []).append(item)
     return index
@@ -308,6 +315,23 @@ def check_evidence(request: OnboardingRequest, policies: dict, controls: dict, e
             if binding not in current for i in items]
 
 
+def severity_is_moot(record: dict, tier: Tier) -> bool:
+    """True when every severity gives the control the same mode at every criticality.
+
+    Containment, for one, is Enforce whatever its severity (the tier floor), so asking
+    a person to confirm an inferred severity there decides nothing."""
+    cls = ControlClass(record["class"])
+    modes = {tuple(mode_by_criticality(s, cls, tier).values()) for s in Severity}
+    return len(modes) == 1
+
+
+def lifted_now(until_tier: str | None, tier: Tier) -> bool:
+    """True when this tier is the first one past the control's last tier."""
+    if until_tier is None:
+        return True  # unknown: keep asking
+    return Tier(until_tier).rank + 1 == tier.rank
+
+
 def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> None:
     """Doubts about what was selected and why, and about who the policies trust."""
     selection, controls, generation = run["selection"], run["controls"], run["generation"]
@@ -319,6 +343,8 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
                       "the matrix change is ratified", text)
         elif text.startswith("inferred severity"):
             record = controls[cid]
+            if severity_is_moot(record, request.maturity_tier):
+                continue  # no severity would give this control another mode: nothing for a person to decide
             out.doubt("inferred-severity", cid, Risk.MEDIUM,
                       f"{text} (rubric, not an AWS source) sets {cid}'s mode to {record['mode']}",
                       f"{record['severity']} is the right severity for {cid}",
@@ -330,7 +356,11 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
                       f"{cid}'s framework mappings are good enough to release on",
                       {"mode": record["mode"], "framework_refs": record["framework_refs"]})
     if request.run_mode != "new":
+        until = {c["control_id"]: c.get("until_tier") for c in (run.get("findings") or {}).get("candidates", [])}
         for entry in selection.get("retired", []):
+            # Only the promotion that lifts it: later tiers find it already lifted (and accepted).
+            if not lifted_now(until.get(entry["control_id"]), request.maturity_tier):
+                continue
             out.doubt("retired", entry["control_id"], Risk.MEDIUM,
                       f"{entry['control_id']} stops applying on this promotion ({entry['reason']}): "
                       "its deny is lifted", "lifting this control is intended at this tier",
