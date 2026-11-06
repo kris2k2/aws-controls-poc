@@ -14,7 +14,8 @@ as pending, not silently skipped.
 What each mode does to a guardrail (spec, "What each mode does per artifact"):
 Enforce deploys the deny with an exemption for break-glass principals only
 (none when the guardrail sets `break_glass_exempt: false`, as the data
-perimeter does);
+perimeter does), plus the platform principals when the guardrail sets
+`platform_exempt: true` (the logging and recording controls);
 Enforce with override deploys it only when approved exceptions exist, naming
 them in the condition; Advise and Report deploy no guardrail.
 """
@@ -50,10 +51,13 @@ def parameters(request: OnboardingRequest, service: str) -> dict[str, list[str]]
         "allowed_regions": list(request.allowed_regions),
         "break_glass_principals": list(request.break_glass_principals),
         "trusted_resource_accounts": list(request.trusted_resource_accounts),
+        "trusted_principal_accounts": list(request.trusted_principal_accounts),
+        "platform_principals": list(request.platform_principals),
         # Every role some guardrail exempts. Exemptions hold only while nobody
         # else can create, change or pass these roles (ORG-C-04).
         "protected_roles": sorted(set(request.break_glass_principals)
-                                  | {e.principal for e in request.exceptions}),
+                                  | {e.principal for e in request.exceptions}
+                                  | set(request.platform_principals)),
     }
     # The same roles by name, as CloudTrail records them in requestParameters.roleName.
     params["protected_role_names"] = sorted({arn.rsplit("/", 1)[-1] for arn in params["protected_roles"]})
@@ -98,6 +102,8 @@ def statement(record: dict, request: OnboardingRequest, params: dict) -> tuple[d
     if not mode.enforcing:
         return None, f"{mode.value}: guardrails are deployed only for enforcing modes"
     exempt = list(request.break_glass_principals) if guardrail.get("break_glass_exempt", True) else []
+    if guardrail.get("platform_exempt", False):
+        exempt += list(request.platform_principals)
     if mode is Mode.ENFORCE_WITH_OVERRIDE:
         approved = [e.principal for e in request.exceptions if e.control_id == cid]
         if not approved:

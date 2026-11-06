@@ -176,7 +176,7 @@ class AssessTest(unittest.TestCase):
 
     def test_every_source_is_counted(self):
         self.assertEqual(self.findings["service"], "athena")
-        self.assertEqual(self.report["counts"], {"organization-baseline": 8, "derived": 1,
+        self.assertEqual(self.report["counts"], {"organization-baseline": 11, "derived": 1,
                                                  "control-catalog": 3, "analyst-overlay": 12})
         origins = {c["control_id"]: c["origin"] for c in self.report["candidates"]}
         self.assertEqual(origins["ORG-C-04"], "organization-baseline")
@@ -246,7 +246,7 @@ class AssessedJourneyTest(unittest.TestCase):
     """Athena through every tier from assessed findings: the outcomes of the hand-written journey."""
 
     def test_the_three_tiers_through_the_cli(self):
-        expected = {"private-preview": 10, "contained": 17, "hardened": 23}
+        expected = {"private-preview": 13, "contained": 20, "hardened": 26}
         with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
             tmp, registry = Path(tmp), None
             for tier, count in expected.items():

@@ -44,6 +44,8 @@ OTHER = "444455556666"   # an organization account not on the preview list
 VPCE = "vpce-0example1111111111"
 ENDPOINTS = {VPCE, "vpce-0example2222222222"}  # every VPC endpoint in the request's org_state
 ORG, OTHER_ORG = "o-exampleorgid", "o-otherorgid"
+OUTSIDE = "999988887777"  # an account outside the organization
+PLATFORM_ROLE = "stacksets-exec-0a1b2c3d4e5f"  # matches the request's platform principal in PREVIEW
 
 # What the organization already allows for other services (an existing
 # allow-list in org_state), so denies are tested against allowed actions.
@@ -156,16 +158,54 @@ class Vectors:
                                      resource=f"arn:aws:iam::{OTHER}:role/BreakGlass-Responder"), False, "ORGC04"),
         ("ORG-C-04", "exemption", req("iam:UpdateAssumeRolePolicy", account=OTHER, role="break-glass",
                                       resource=f"arn:aws:iam::{OTHER}:role/BreakGlass-Responder"), True, None),
+        # Leaving the organization drops every SCP and RCP at once; break-glass is held to it too.
+        ("ORG-C-07", "positive", req("organizations:DescribeOrganization"), True, None),
+        ("ORG-C-07", "negative", req("organizations:LeaveOrganization"), False, "ORGC07"),
+        ("ORG-C-07", "exemption", req("organizations:LeaveOrganization", role="break-glass"), False, "ORGC07"),
+        # A role in an outside account would make its caller an outside principal, off every SCP.
+        ("ORG-C-08", "positive", req("sts:AssumeRole", resource=f"arn:aws:iam::{OTHER}:role/analytics-etl"), True,
+         None),
+        ("ORG-C-08", "negative", req("sts:AssumeRole", vpce=None, resource=f"arn:aws:iam::{OUTSIDE}:role/exfil",
+                                     **{"aws:ResourceOrgID": OTHER_ORG, "aws:ResourceAccount": OUTSIDE}),
+         False, "ORGC08"),
+        ("ORG-C-08", "exemption", req("sts:AssumeRole", vpce=None, role="break-glass",
+                                      resource=f"arn:aws:iam::{OUTSIDE}:role/exfil",
+                                      **{"aws:ResourceOrgID": OTHER_ORG, "aws:ResourceAccount": OUTSIDE}),
+         False, "ORGC08"),
+        # Outsiders can't assume organization roles or reach its queues and secrets, whatever a trust or resource
+        # policy says; AWS services can still assume their roles.
+        ("ORG-C-09", "positive", req("sts:AssumeRole", resource=f"arn:aws:iam::{PREVIEW}:role/analytics-etl"), True,
+         None),
+        ("ORG-C-09", "positive", req("sts:AssumeRole", vpce=None, resource=f"arn:aws:iam::{PREVIEW}:role/etl",
+                                     **{"aws:PrincipalOrgID": OTHER_ORG, "aws:PrincipalIsAWSService": "true"}),
+         True, None),
+        ("ORG-C-09", "negative", req("sts:AssumeRole", account=OUTSIDE, vpce=None,
+                                     resource=f"arn:aws:iam::{PREVIEW}:role/analytics-etl",
+                                     **{"aws:PrincipalOrgID": OTHER_ORG}), False, "ORGC09"),
+        ("ORG-C-09", "negative", req("secretsmanager:GetSecretValue", account=OUTSIDE, vpce=None,
+                                     **{"aws:PrincipalOrgID": OTHER_ORG}), False, "ORGC09"),
+        ("ORG-C-09", "exemption", req("sqs:ReceiveMessage", role="break-glass", vpce=None,
+                                      **{"aws:PrincipalOrgID": OTHER_ORG}), False, "ORGC09"),
     ]
     # From Contained the preview restriction retires: other organization accounts may use Athena.
     PROMOTION = [("ATH-C-01", "retired", req("athena:StartQueryExecution", account=OTHER), True, None)]
     SUPERVISION = [
         ("ORG-S-01", "positive", req("cloudtrail:LookupEvents"), True, None),
         ("ORG-S-01", "negative", req("cloudtrail:StopLogging"), False, "ORGS01"),
+        ("ORG-S-01", "negative", req("cloudtrail:CreateTrail"), False, "ORGS01"),
         ("ORG-S-01", "exemption", req("cloudtrail:StopLogging", role="break-glass"), True, None),
+        ("ORG-S-01", "exemption", req("cloudtrail:CreateTrail", role=PLATFORM_ROLE), True, None),
         ("ORG-S-02", "positive", req("config:DescribeConfigurationRecorders"), True, None),
         ("ORG-S-02", "negative", req("config:StopConfigurationRecorder"), False, "ORGS02"),
+        ("ORG-S-02", "negative", req("config:PutConfigurationRecorder"), False, "ORGS02"),
+        ("ORG-S-02", "negative", req("config:PutDeliveryChannel"), False, "ORGS02"),
+        ("ORG-S-02", "negative", req("config:DisassociateResourceTypes"), False, "ORGS02"),
+        ("ORG-S-02", "negative", req("config:PutRetentionConfiguration"), False, "ORGS02"),
+        # The platform role is exempt from the logging and recording controls only.
+        ("ORG-S-02", "negative", req("config:PutConfigurationRecorder", account=OTHER, role=PLATFORM_ROLE), False,
+         "ORGS02"),
         ("ORG-S-02", "exemption", req("config:StopConfigurationRecorder", role="break-glass"), True, None),
+        ("ORG-S-02", "exemption", req("config:PutConfigurationRecorder", role=PLATFORM_ROLE), True, None),
     ]
     UNTAGGED_CREATE = req("athena:CreateWorkGroup")
     TAGGED_CREATE = req("athena:CreateWorkGroup", **{"aws:RequestTag/cost-center": "cc-0001"})
@@ -196,7 +236,8 @@ class JourneyTest(unittest.TestCase):
     def test_private_preview_scope(self):
         _, sel, controls, _ = self.tier("private-preview")
         self.assertEqual(sel["controls"], ["ATH-C-01", "ATH-C-02", "ATH-C-03", "ATH-C-04",
-                                           "ORG-C-01", "ORG-C-02", "ORG-C-03", "ORG-C-04", "ORG-C-05", "ORG-C-06"])
+                                           "ORG-C-01", "ORG-C-02", "ORG-C-03", "ORG-C-04", "ORG-C-05", "ORG-C-06",
+                                           "ORG-C-07", "ORG-C-08", "ORG-C-09"])
         self.assertEqual({c["mode"] for c in controls.values()}, {"Enforce"})
         self.assertEqual(sel["next_tier"]["tier"], "Contained")
         self.assertEqual(sel["next_tier"]["retires"], ["ATH-C-01"])
@@ -222,8 +263,8 @@ class JourneyTest(unittest.TestCase):
         _, sel, controls, _ = self.tier("contained")
         self.assertNotIn("ATH-C-01", sel["controls"])
         self.assertEqual(sel["retired"], [{"control_id": "ATH-C-01", "reason": "applies until Private Preview"}])
-        self.assertEqual(len(sel["controls"]), 17)
-        self.assertEqual(sel["counts"]["class"], {"Containment": 9, "Supervision": 8})
+        self.assertEqual(len(sel["controls"]), 20)
+        self.assertEqual(sel["counts"]["class"], {"Containment": 12, "Supervision": 8})
         for cid, rec in controls.items():
             if rec["class"] == "Supervision":
                 self.assertIn(rec["mode"], ("Enforce with override", "Enforce"), cid)
@@ -251,14 +292,15 @@ class JourneyTest(unittest.TestCase):
         changes = {c["control_id"]: c["change"] for c in sel["registry_changes"]}
         self.assertEqual(changes, {"ORG-C-01": "reused", "ORG-C-02": "reused", "ORG-C-03": "reused",
                                    "ORG-C-04": "reused", "ORG-C-05": "reused", "ORG-C-06": "reused",
+                                   "ORG-C-07": "reused", "ORG-C-08": "reused", "ORG-C-09": "reused",
                                    "ORG-S-01": "added", "ORG-S-02": "added"})
 
     # --- Hardened --------------------------------------------------------------------
     def test_hardened_scope(self):
         _, sel, controls, _ = self.tier("hardened")
-        self.assertEqual(len(sel["controls"]), 23)
+        self.assertEqual(len(sel["controls"]), 26)
         self.assertIsNone(sel["next_tier"])
-        self.assertEqual(sel["counts"]["mode"], {"Enforce": 12, "Enforce with override": 5, "Advise": 5, "Report": 1})
+        self.assertEqual(sel["counts"]["mode"], {"Enforce": 15, "Enforce with override": 5, "Advise": 5, "Report": 1})
         self.assertEqual(controls["ATH-H-01"]["mode"], "Advise")   # Low, Security Hub, Moderate
         self.assertEqual(controls["ATH-H-04"]["mode"], "Report")   # Informational
 
@@ -385,7 +427,7 @@ class JourneyCliTest(unittest.TestCase):
                                        "--out", str(run)]), 0)
                 self.assertEqual(main(["generate", str(request), "--run", str(run)]), 0)
                 registry = json.loads((run / "registry.json").read_text())
-            self.assertEqual(len(list((tmp / "hardened" / "controls").glob("*.json"))), 23)
+            self.assertEqual(len(list((tmp / "hardened" / "controls").glob("*.json"))), 26)
             self.assertTrue((tmp / "hardened" / "org-policies" / "vpce-org-guardrails.json").exists())
             self.assertTrue((tmp / "hardened" / "org-policies" / "scp-org-guardrails.json").exists())
 

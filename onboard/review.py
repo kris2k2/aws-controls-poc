@@ -392,9 +392,11 @@ def retirement_covered(cid: str, run: dict) -> bool:
 def check_break_glass(request: OnboardingRequest, out: _Findings) -> None:
     """Who can assume a break-glass role: checked from the trust policies in org_state, else a doubt.
 
-    Each role matching a break-glass pattern must trust only principals in the organization's accounts
-    (org_state.accounts): IAM principals with MFA required, or identity providers in those accounts;
-    never a wildcard, an outside account or a service. A violation blocks."""
+    Each role matching a break-glass pattern must trust only named principals in the organization's
+    accounts (org_state.accounts): IAM principals with MFA required, or identity providers in those
+    accounts; never a wildcard, a whole account (its root or bare ID), an outside account or a service.
+    A whole account would let anyone there allowed to create a user and an MFA device assume the role.
+    A violation blocks."""
     patterns = list(request.break_glass_principals)
     if not patterns:
         return
@@ -415,6 +417,28 @@ def check_break_glass(request: OnboardingRequest, out: _Findings) -> None:
             out.block("break-glass", role["arn"], problem)
 
 
+def check_platform(request: OnboardingRequest, out: _Findings) -> None:
+    """Who can assume a platform role (exempt from ORG-S-01 and ORG-S-02): checked like break-glass, from
+    the trust policies in org_state, else a doubt; automation can't do MFA, so MFA isn't required."""
+    patterns = list(request.platform_principals)
+    if not patterns:
+        return
+    org = request.org_state
+    accounts = {a.get("id") for a in org.get("accounts") or [] if isinstance(a, dict)}
+    roles = [r for r in org.get("roles") or [] if isinstance(r, dict) and isinstance(r.get("arn"), str)]
+    unchecked = [p for p in patterns if not any(fnmatch.fnmatchcase(r["arn"], p) for r in roles)]
+    if unchecked:
+        out.doubt("platform", "principals", Risk.MEDIUM,
+                  "platform roles may change CloudTrail and Config recording; who can assume them is set by "
+                  f"trust policies org_state doesn't give for {', '.join(unchecked)}",
+                  "the platform roles' trust policies admit only the organization's deployment service", sorted(patterns))
+        return
+    for role in roles:
+        if any(fnmatch.fnmatchcase(role["arn"], p) for p in patterns):
+            for problem in trust_problems(role.get("trust_policy"), accounts, require_mfa=False):
+                out.block("platform", role["arn"], problem)
+
+
 def _account_of(principal: str) -> str | None:
     if principal.isdigit() and len(principal) == 12:
         return principal
@@ -422,7 +446,7 @@ def _account_of(principal: str) -> str | None:
     return parts[4] if len(parts) > 5 and parts[0] == "arn" else None
 
 
-def trust_problems(policy, accounts: set[str]) -> list[str]:
+def trust_problems(policy, accounts: set[str], require_mfa: bool = True) -> list[str]:
     statements = (policy or {}).get("Statement") if isinstance(policy, dict) else None
     if not isinstance(statements, list) or not statements:
         return ["no trust policy to check"]
@@ -445,7 +469,9 @@ def trust_problems(policy, accounts: set[str]) -> list[str]:
                     problems.append(f"trusts the service {value}")
                 elif account not in accounts:
                     problems.append(f"trusts {value}, outside the organization's accounts")
-                elif kind == "AWS" and not mfa:
+                elif kind == "AWS" and (str(value) == account or str(value).endswith(":root")):
+                    problems.append(f"trusts every principal in account {account} ({value}), not a named one")
+                elif kind == "AWS" and require_mfa and not mfa:
                     problems.append(f"trusts {value} without requiring MFA (aws:MultiFactorAuthPresent)")
     return problems
 
@@ -516,6 +542,14 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
                    "expires": exc.expires.isoformat(), "rationale": exc.rationale})
     if request.break_glass_principals:
         check_break_glass(request, out)
+    check_platform(request, out)
+    if request.trusted_principal_accounts:
+        out.doubt("trusted-accounts", "principal-accounts", Risk.MEDIUM,
+                  "principals in these outside accounts may assume organization roles and reach its SQS queues "
+                  "and Secrets Manager secrets, as far as those roles' trust and resource policies admit them: "
+                  + ", ".join(sorted(request.trusted_principal_accounts)),
+                  "each account is a vendor or partner the organization trusts with that access",
+                  sorted(request.trusted_principal_accounts))
     if request.trusted_resource_accounts:
         out.doubt("trusted-accounts", "resource-accounts", Risk.MEDIUM,
                   "data may leave the organization to these accounts through the data perimeter: "

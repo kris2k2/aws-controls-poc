@@ -367,7 +367,7 @@
           "status": "not_applicable"
         },
         "cloudtrail": {
-          "detects": "any of the guarded IAM calls on a break-glass or exception role",
+          "detects": "any of the guarded IAM calls on a break-glass, exception or platform role",
           "match": {
             "eventName": [
               "AttachRolePolicy",
@@ -423,7 +423,7 @@
       "severity": "Critical",
       "severity_source": "rubric",
       "shared": true,
-      "title": "Only break-glass principals change or pass break-glass and exception roles"
+      "title": "Only break-glass principals change or pass break-glass, exception and platform roles"
     },
     {
       "blind_spots": [
@@ -610,6 +610,294 @@
       "severity_source": "rubric",
       "shared": true,
       "title": "The organization's VPC endpoints reach only organization resources and named trusted accounts"
+    },
+    {
+      "blind_spots": [
+        "an account the management account removes (RemoveAccountFromOrganization)"
+      ],
+      "citations": [
+        {
+          "anchor": "organizations:LeaveOrganization – Note that the organization administrator can apply a policy to your account that removes this permission, preventing you from removing your account from the organization.",
+          "retrieved": "2026-11-06",
+          "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts_leave-as-member.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-07",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "cm-5",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-3",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "organizations:LeaveOrganization"
+        ],
+        "break_glass_exempt": false,
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "an account leaving, or trying to leave, the organization",
+          "match": {
+            "eventName": [
+              "LeaveOrganization"
+            ],
+            "eventSource": [
+              "organizations.amazonaws.com"
+            ]
+          },
+          "status": "planned"
+        },
+        "config": {
+          "reason": "an API call, not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "Organizations is not an RCP-supported service",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "leaving is an API call, not a resource in a Terraform plan",
+          "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
+        }
+      },
+      "notes": "A member account that leaves the organization is no longer bound by any SCP or RCP, so one call undoes every other guardrail, the data perimeter included. Break-glass is not exempt: leaving is never how to recover from a guardrail. A member principal can call it with IAM permissions alone, once the account meets AWS's standalone-account prerequisites.",
+      "objective": "organization-membership",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Member accounts stay in the organization"
+    },
+    {
+      "blind_spots": [
+        "management account",
+        "AWS-owned roles a service asks its caller to assume (calibrate before deploying)"
+      ],
+      "citations": [
+        {
+          "anchor": "aws:ResourceOrgID and aws:ResourceAccount carry the organization and account of the role being assumed in sts:AssumeRole",
+          "retrieved": "2026-11-06",
+          "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html",
+          "verification": "not-run"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-08",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "sc-7.10",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "sts:AssumeRole"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "StringNotEqualsIfExists": {
+            "aws:ResourceAccount": "${trusted_resource_accounts}",
+            "aws:ResourceOrgID": "${org_id}"
+          }
+        },
+        "optional_parameters": [
+          "trusted_resource_accounts"
+        ],
+        "type": "scp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "denied attempts to assume roles outside the organization",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "eventName": [
+              "AssumeRole"
+            ],
+            "eventSource": [
+              "sts.amazonaws.com"
+            ]
+          },
+          "status": "planned"
+        },
+        "config": {
+          "reason": "an API call, not configuration state",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "reason": "RCPs don't see requests to resources outside the organization",
+          "status": "not_applicable"
+        },
+        "scp": {
+          "status": "planned"
+        },
+        "sentinel": {
+          "reason": "the account owning an assumed role isn't in the plan",
+          "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "the network-path counterpart is ORG-C-06, which binds every caller through the endpoints",
+          "status": "not_applicable"
+        }
+      },
+      "notes": "A role in an outside account turns whoever assumes it into an outside principal, which no SCP binds; from there every service is open, off the organization's endpoints. Fails closed: a role in a standalone account has no aws:ResourceOrgID and is denied unless its account is trusted. Break-glass is not exempt, as for the rest of the data perimeter. Whether STS sets these keys for AssumeRole isn't verified yet: calibrate against AWS before deploying.",
+      "objective": "role-perimeter",
+      "severity": "High",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Organization principals assume roles only in organization accounts and named trusted accounts"
+    },
+    {
+      "blind_spots": [
+        "service-linked roles",
+        "resources in the management account"
+      ],
+      "citations": [
+        {
+          "anchor": "RCPs apply to actions for the following AWS services: ... Amazon SQS (sqs) ... AWS Secrets Manager (secretsmanager) ... AWS Security Token Service (sts)",
+          "retrieved": "2026-11-06",
+          "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps.html",
+          "verification": "verified"
+        }
+      ],
+      "class": "Containment",
+      "control_id": "ORG-C-09",
+      "framework_refs": [
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-3",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        },
+        {
+          "catalog_version": "5.2.0",
+          "framework": "NIST-SP-800-53",
+          "id": "ac-4",
+          "mapping_type": "inferred",
+          "verification": "not-run",
+          "version": "r5"
+        }
+      ],
+      "guardrail": {
+        "actions": [
+          "sts:AssumeRole",
+          "sqs:*",
+          "secretsmanager:*"
+        ],
+        "break_glass_exempt": false,
+        "conditions": {
+          "BoolIfExists": {
+            "aws:PrincipalIsAWSService": "false"
+          },
+          "StringNotEqualsIfExists": {
+            "aws:PrincipalAccount": "${trusted_principal_accounts}",
+            "aws:PrincipalOrgID": "${org_id}"
+          }
+        },
+        "optional_parameters": [
+          "trusted_principal_accounts"
+        ],
+        "type": "rcp"
+      },
+      "implementations": {
+        "boundary": {
+          "reason": "an organization-wide guardrail, not a delegated-role control",
+          "status": "not_applicable"
+        },
+        "cloudtrail": {
+          "detects": "denied calls from principals outside the organization",
+          "match": {
+            "errorCode": [
+              {
+                "prefix": "AccessDenied"
+              }
+            ],
+            "eventSource": [
+              "sts.amazonaws.com",
+              "sqs.amazonaws.com",
+              "secretsmanager.amazonaws.com"
+            ],
+            "userIdentity": {
+              "type": [
+                "AWSAccount"
+              ]
+            }
+          },
+          "status": "planned"
+        },
+        "config": {
+          "reason": "who calls is not configuration state; grants to outside accounts show in IAM Access Analyzer",
+          "status": "not_applicable"
+        },
+        "rcp": {
+          "status": "planned"
+        },
+        "scp": {
+          "reason": "no action-level deny: the caller is outside the organization",
+          "status": "not_applicable"
+        },
+        "sentinel": {
+          "reason": "not visible in a Terraform plan",
+          "status": "not_expressible"
+        },
+        "vpce": {
+          "reason": "not a network-path control",
+          "status": "not_applicable"
+        }
+      },
+      "notes": "A workload can trust an outside account in a role's trust policy, or share a queue or a secret through its resource policy; this caps both, whatever the policy says. Only sts:AssumeRole: AssumeRoleWithSAML and AssumeRoleWithWebIdentity (IAM Identity Center, GitHub OIDC) carry no organization ID and stay open. AWS services are exempt, so services can still assume their roles. Break-glass is organization principals, so the exemption is moot here.",
+      "objective": "trust-perimeter",
+      "severity": "Critical",
+      "severity_source": "rubric",
+      "shared": true,
+      "title": "Only organization principals, named trusted accounts or AWS services assume organization roles or reach its SQS queues and Secrets Manager secrets"
     },
     {
       "citations": [
@@ -1017,8 +1305,10 @@
           "cloudtrail:DeleteTrail",
           "cloudtrail:UpdateTrail",
           "cloudtrail:PutEventSelectors",
-          "cloudtrail:PutInsightSelectors"
+          "cloudtrail:PutInsightSelectors",
+          "cloudtrail:CreateTrail"
         ],
+        "platform_exempt": true,
         "type": "scp"
       },
       "implementations": {
@@ -1027,9 +1317,10 @@
           "status": "not_applicable"
         },
         "cloudtrail": {
-          "detects": "trail changes",
+          "detects": "trail changes, and new trails",
           "match": {
             "eventName": [
+              "CreateTrail",
               "DeleteTrail",
               "PutEventSelectors",
               "PutInsightSelectors",
@@ -1065,11 +1356,12 @@
           "status": "not_applicable"
         }
       },
+      "notes": "Platform principals (the roles the organization deploys logging and recording with, such as a Config StackSet's execution role) are exempt, as well as break-glass; ORG-C-04 protects them like break-glass roles.",
       "objective": "logging-tamper",
       "severity": "High",
       "severity_source": "rubric",
       "shared": true,
-      "title": "CloudTrail can't be stopped or reconfigured"
+      "title": "CloudTrail can't be stopped, reconfigured or copied out"
     },
     {
       "citations": [],
@@ -1097,8 +1389,15 @@
         "actions": [
           "config:StopConfigurationRecorder",
           "config:DeleteConfigurationRecorder",
-          "config:DeleteDeliveryChannel"
+          "config:DeleteDeliveryChannel",
+          "config:PutConfigurationRecorder",
+          "config:PutDeliveryChannel",
+          "config:AssociateResourceTypes",
+          "config:DisassociateResourceTypes",
+          "config:PutRetentionConfiguration",
+          "config:DeleteRetentionConfiguration"
         ],
+        "platform_exempt": true,
         "type": "scp"
       },
       "implementations": {
@@ -1107,11 +1406,17 @@
           "status": "not_applicable"
         },
         "cloudtrail": {
-          "detects": "recorder changes",
+          "detects": "recorder, delivery channel and retention changes",
           "match": {
             "eventName": [
+              "AssociateResourceTypes",
               "DeleteConfigurationRecorder",
               "DeleteDeliveryChannel",
+              "DeleteRetentionConfiguration",
+              "DisassociateResourceTypes",
+              "PutConfigurationRecorder",
+              "PutDeliveryChannel",
+              "PutRetentionConfiguration",
               "StopConfigurationRecorder"
             ],
             "eventSource": [
@@ -1140,11 +1445,12 @@
           "status": "not_applicable"
         }
       },
+      "notes": "Platform principals (the roles the organization deploys logging and recording with, such as a Config StackSet's execution role) are exempt, as well as break-glass; ORG-C-04 protects them like break-glass roles.",
       "objective": "detection-tamper",
       "severity": "High",
       "severity_source": "rubric",
       "shared": true,
-      "title": "Config recording can't be stopped"
+      "title": "Config recording can't be stopped, narrowed or redirected"
     },
     {
       "citations": [

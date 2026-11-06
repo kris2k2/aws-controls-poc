@@ -30,7 +30,8 @@ from . import __version__
 CATEGORIES = {
     "exfiltration": ("Data exfiltration", "Data leaves the organization, its network or its Regions."),
     "access": ("Unauthorized access", "Someone outside the authorized scope uses the service or reaches its data."),
-    "escalation": ("Privilege escalation", "Someone takes over the exemptions given to break-glass and exception roles."),
+    "escalation": ("Privilege escalation", "Someone takes over the exemptions given to break-glass, exception and "
+                   "platform roles, or takes an account out from under every guardrail."),
     "evasion": ("Defense evasion", "Activity is hidden from logging, configuration recording or detection."),
     "misconfiguration": ("Insecure configuration", "Resources run with weaker settings than the baseline."),
     "abuse": ("Cost and accountability", "Spend or resources that can't be bounded, tracked or attributed."),
@@ -39,15 +40,19 @@ CATEGORIES = {
 OBJECTIVES = {
     "region-containment": ("exfiltration", "Workloads and data placed in Regions outside the allowed set"),
     "resource-perimeter": ("exfiltration", "Organization credentials used to copy data to buckets outside the organization"),
+    "role-perimeter": ("exfiltration", "Organization principals assuming roles in outside accounts, where no SCP binds them"),
     "data-perimeter": ("exfiltration", "The organization's VPC endpoints used with outside credentials, or to reach outside resources"),
     "no-data-egress": ("exfiltration", "Federated or cross-account data catalogs that move data across the boundary"),
     "identity-perimeter": ("access", "Principals outside the organization reaching its S3 objects and KMS keys"),
+    "trust-perimeter": ("access", "Principals outside the organization assuming its roles or reaching its queues and secrets"),
     "preview-accounts": ("access", "The service used outside the authorized preview accounts"),
     "network-perimeter": ("access", "Stolen credentials used against the API from outside the organization's network"),
     "no-external-sharing": ("access", "Excluded capabilities (Spark sessions, notebooks) used to run code and share results"),
-    "privilege-escalation": ("escalation", "Break-glass or exception roles created, changed or passed to inherit their exemptions"),
-    "logging-tamper": ("evasion", "The audit trail stopped or reconfigured to hide activity"),
-    "detection-tamper": ("evasion", "Configuration recording stopped to hide drift"),
+    "privilege-escalation": ("escalation", "Break-glass, exception or platform roles created, changed or passed to inherit "
+                             "their exemptions"),
+    "organization-membership": ("escalation", "A member account leaving the organization, and every SCP and RCP with it"),
+    "logging-tamper": ("evasion", "The audit trail stopped, reconfigured or copied out to hide or leak activity"),
+    "detection-tamper": ("evasion", "Configuration recording stopped, narrowed or redirected to hide drift"),
     "guardrail-detection": ("evasion", "Probing of guardrails and use of break-glass going unnoticed"),
     "config-recording": ("evasion", "Service resources missing from configuration history"),
     "logging": ("evasion", "Query activity without metrics or logs"),

@@ -293,7 +293,8 @@ class AthenaArtifactsTest(unittest.TestCase):
             with self.subTest(control=cid):
                 self.assertLessEqual(actions, set(names))
             compared.append(cid)
-        self.assertEqual(compared, ["ATH-C-02", "ATH-C-03", "ATH-H-06", "ORG-C-04", "ORG-S-01", "ORG-S-02"])
+        self.assertEqual(compared, ["ATH-C-02", "ATH-C-03", "ATH-H-06", "ORG-C-04", "ORG-C-07", "ORG-C-08", "ORG-S-01",
+                                    "ORG-S-02"])
 
     def test_config_rules_and_sentinel_policies_judge_workgroups(self):
         generated = self.generated("hardened")

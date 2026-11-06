@@ -115,7 +115,7 @@ class DecisionTest(RunCase):
         # The numbers in docs/simulations/athena-journey.md, section 6.
         # Nine inferred severities on containment controls aren't asked: containment is Enforce whatever
         # the severity, so the answer would change nothing.
-        self.assertEqual(result["counts"], {"needs acceptance": 7, "accepted": 0, "auto-accepted": 13})
+        self.assertEqual(result["counts"], {"needs acceptance": 10, "accepted": 0, "auto-accepted": 16})
         self.assertFalse([d for d in open_ if d.startswith("inferred-severity:")])
 
     def test_without_the_api_contract_nothing_is_proved(self):
@@ -427,6 +427,43 @@ class BreakGlassTrustTest(RunCase):
 
     def test_a_role_it_cannot_see_is_still_asked(self):
         self.assertIn("break-glass:principals", self.doubts(self.review_with_trust(drop=True), "needs acceptance"))
+
+    def test_a_whole_account_blocks_even_with_mfa(self):
+        # Anyone in the account allowed to create a user and an MFA device could become break-glass.
+        for principal in ("arn:aws:iam::111122223333:root", "111122223333"):
+            result = self.review_with_trust(lambda s: s.update(Principal={"AWS": principal}))
+            self.assertEqual(result["decision"], "blocked", principal)
+            self.assertTrue(any(b["check"] == "break-glass" and "every principal in account 111122223333" in b["detail"]
+                                for b in result["blockers"]), (principal, result["blockers"]))
+
+
+class PlatformTrustTest(RunCase):
+    """Platform roles are exempt from the logging and recording guardrails: their trust is checked too."""
+
+    def review_with_platform(self, change=None, drop=False):
+        data = load("request-contained.json")
+        org = data["org_state"]
+        if drop:
+            org["roles"] = [r for r in org["roles"] if "stacksets-exec" not in r["arn"]]
+        if change:
+            change(next(r for r in org["roles"] if "stacksets-exec" in r["arn"])["trust_policy"]["Statement"][0])
+        request_path, run = self.build("contained", name="platform", org_state=org)
+        return self.review(request_path, run)
+
+    def test_a_named_organization_role_needs_no_mfa_and_no_person(self):
+        result = self.review_with_platform()
+        self.assertFalse([b for b in result["blockers"] if b["check"] == "platform"])
+        self.assertNotIn("platform:principals", self.doubts(result))
+
+    def test_an_outside_account_or_a_whole_account_blocks(self):
+        for principal, text in (("arn:aws:iam::999988887777:role/deployer", "outside the organization"),
+                                ("arn:aws:iam::444455556666:root", "every principal in account")):
+            result = self.review_with_platform(lambda s: s.update(Principal={"AWS": principal}))
+            self.assertTrue(any(b["check"] == "platform" and text in b["detail"] for b in result["blockers"]),
+                            (principal, result["blockers"]))
+
+    def test_a_role_it_cannot_see_is_asked(self):
+        self.assertIn("platform:principals", self.doubts(self.review_with_platform(drop=True), "needs acceptance"))
 
 
 class JourneyReviewTest(RunCase):

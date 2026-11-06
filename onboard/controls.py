@@ -71,6 +71,8 @@ def _check_guardrail(g: Any, where: str, problems: list[str]) -> None:
         problems.append(f"{where}.guardrail.optional_parameters must be a list of parameter names")
     if not isinstance(g.get("break_glass_exempt", True), bool):
         problems.append(f"{where}.guardrail.break_glass_exempt must be true or false")
+    if not isinstance(g.get("platform_exempt", False), bool):
+        problems.append(f"{where}.guardrail.platform_exempt must be true or false")
     resources = g.get("resources", ["*"])
     if not isinstance(resources, list) or not resources or not all(isinstance(r, str) and r for r in resources):
         problems.append(f"{where}.guardrail.resources must be a non-empty list of ARN patterns or ${{parameters}}")

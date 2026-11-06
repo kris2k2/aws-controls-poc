@@ -70,6 +70,7 @@ EXTRA_ACTIONS = (
     "sts:GetCallerIdentity", "organizations:DescribeOrganization", "organizations:LeaveOrganization",
     "cloudtrail:LookupEvents", "config:DescribeConfigurationRecorders", "route53:ListHostedZones",
     "cloudfront:ListDistributions", "support:DescribeCases", "ec2:RunInstances",
+    "sqs:SendMessage", "sqs:ReceiveMessage", "secretsmanager:GetSecretValue", "secretsmanager:PutResourcePolicy",
 )
 
 CONSTRAINS_PRINCIPALS = "organization principals"  # enforceable with an SCP
@@ -155,10 +156,12 @@ class Facts:
     break_glass: tuple[str, ...]
     exception_principals: tuple[str, ...]
     allow_prefixes: tuple[str, ...]
+    platform_principals: tuple[str, ...] = ()
+    trusted_principal_accounts: tuple[str, ...] = ()
 
     @property
     def protected_roles(self) -> tuple[str, ...]:
-        return tuple(sorted(set(self.break_glass) | set(self.exception_principals)))
+        return tuple(sorted(set(self.break_glass) | set(self.exception_principals) | set(self.platform_principals)))
 
     @classmethod
     def of(cls, request, findings: dict) -> "Facts":
@@ -175,6 +178,8 @@ class Facts:
             break_glass=tuple(request.break_glass_principals),
             exception_principals=tuple(e.principal for e in request.exceptions),
             allow_prefixes=tuple([service] + sorted({d["prefix"] for d in findings.get("dependencies", [])})),
+            platform_principals=tuple(request.platform_principals),
+            trusted_principal_accounts=tuple(request.trusted_principal_accounts),
         )
 
 
@@ -198,6 +203,7 @@ class Space:
                               | {ORG_ACCOUNT_ON_NO_LIST})
         principals = [role(a, n, org) for a in org_accounts for n in names]
         principals += [role(EXTERNAL_ACCOUNT, n, OTHER_ORG) for n in names]
+        principals += [role(a, "analyst", OTHER_ORG) for a in facts.trusted_principal_accounts]
         principals += [role(STANDALONE_ACCOUNT, "analyst", None), ANONYMOUS, AWS_SERVICE, *extra_principals]
         self.values = {
             "principal": principals,
@@ -264,17 +270,21 @@ class Property:
     reads: tuple[str, ...] = ()           # dimensions deny_when reads besides principal
     deny_when: Callable = field(default=lambda r, f: True)
     break_glass_exempt: bool = True       # False: break-glass is held to this control too
+    platform_exempt: bool = False         # True: the platform principals are exempt too (logging, recording)
 
     def patterns(self, facts: Facts) -> tuple[list[str], list[str], list[str]]:
         get = lambda v: list(v(facts) if callable(v) else v)  # noqa: E731
         return get(self.actions), get(self.not_actions), get(self.resources)
 
 
-def trusted(principal: Principal, facts: Facts, exceptions: tuple[str, ...], break_glass: bool = True) -> bool:
-    """Exempt by design: an organization principal that is break-glass or holds an approved exception."""
+def trusted(principal: Principal, facts: Facts, exceptions: tuple[str, ...], break_glass: bool = True,
+            platform: bool = False) -> bool:
+    """Exempt by design: an organization principal that is break-glass, holds an approved exception, or
+    (for the logging and recording controls) is a platform principal."""
     if not principal.in_org or principal.arn is None:
         return False
-    return any(matches(p, principal.arn) for p in (facts.break_glass if break_glass else ()) + exceptions)
+    exempt = (facts.break_glass if break_glass else ()) + (facts.platform_principals if platform else ()) + exceptions
+    return any(matches(p, principal.arn) for p in exempt)
 
 
 def _in_scope(patterns: tuple[list, list, list], action: str, resource: str) -> bool:
@@ -300,7 +310,7 @@ def property_denies(prop: Property, point: dict, facts: Facts, exceptions: tuple
         return False
     if not _in_scope(prop.patterns(facts), point["action"], point["resource"]):
         return False
-    if trusted(point["principal"], facts, exceptions, prop.break_glass_exempt):
+    if trusted(point["principal"], facts, exceptions, prop.break_glass_exempt, prop.platform_exempt):
         return False
     return bool(prop.deny_when(View(point, prop.reads), facts))
 
@@ -308,8 +318,10 @@ def property_denies(prop: Property, point: dict, facts: Facts, exceptions: tuple
 def to_request(point: dict, facts: Facts) -> Request:
     """Build the evaluator's request context from a point in the space."""
     p: Principal = point["principal"]
-    ctx = {"aws:ViaAWSService": "true" if point.get("via") else "false",
-           "aws:PrincipalIsAWSService": "true" if p.service else "false"}
+    ctx = {"aws:ViaAWSService": "true" if point.get("via") else "false"}
+    # "Anonymous requests do not include this key" (IAM condition keys reference, checked 2026-11-06).
+    if p.service or p.arn is not None:
+        ctx["aws:PrincipalIsAWSService"] = "true" if p.service else "false"
     if p.org_id:
         ctx["aws:PrincipalOrgID"] = p.org_id
     optional = {"aws:SourceVpce": point.get("vpce"), "aws:ResourceOrgID": point.get("resource_org"),
