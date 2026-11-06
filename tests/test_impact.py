@@ -90,6 +90,19 @@ class ImpactTest(RunCase):
         failed = {i["sid"] for i in self.run_replay(log)["evidence"]["items"] if i["result"] == "fail"}
         self.assertEqual(failed, {"ORGC02"})
 
+    def test_examples_name_roles_never_people(self):
+        log = normal_activity()
+        when = dt.datetime(2026, 10, 3, 12, tzinfo=dt.timezone.utc)
+        user = record(when, "athena.amazonaws.com", "StartQueryExecution", region="us-west-2", vpce=ATHENA_VPCE)
+        user["userIdentity"] = {"type": "IAMUser", "accountId": PREVIEW,
+                                "arn": f"arn:aws:iam::{PREVIEW}:user/example-person"}
+        log["Records"].append(user)
+        failed = [i for i in self.run_replay(log)["evidence"]["items"] if i["result"] == "fail"]
+        text = json.dumps(self.run_replay(log))
+        self.assertTrue(failed)
+        self.assertNotIn("example-person", text)
+        self.assertIn(f"IAMUser in {PREVIEW}", text)
+
     def test_bad_input_is_refused(self):
         with self.assertRaises(ImpactError):
             load_records(b"[1, 2]")

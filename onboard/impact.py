@@ -125,6 +125,14 @@ def to_request(record: dict, org: Organization, org_id: str) -> tuple[Request, s
     return request, known
 
 
+def _who(record: dict, req: Request) -> str:
+    """A role's ARN, never a person's: an IAM user's ARN carries their name (personal data)."""
+    kind = (record.get("userIdentity") or {}).get("type")
+    if kind == "AssumedRole" and req.principal_arn:
+        return req.principal_arn
+    return f"{kind or 'a principal'} in {req.principal_account or 'an unknown account'}"
+
+
 def _scope(name: str, composition: dict, org: Organization) -> set[str] | None:
     """Accounts whose calls a policy binds: None for every account."""
     placement = composition.get("placements", {}).get(name)
@@ -180,7 +188,7 @@ def replay(policies: dict, composition: dict, org_state: dict, records: list[dic
                 denied += 1
                 if len(examples) < MAX_EXAMPLES:
                     examples.append({"eventTime": record.get("eventTime"), "action": req.action,
-                                     "account": req.principal_account, "principal": req.principal_arn})
+                                     "account": req.principal_account, "principal": _who(record, req)})
         entry = {"policy": name, "sid": stmt.get("Sid"), "statement_sha256": sha256(stmt), "in_scope": in_scope,
                  "denied": denied, "undetermined": undetermined, "examples": examples}
         statements.append(entry)
