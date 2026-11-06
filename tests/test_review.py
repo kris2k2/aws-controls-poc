@@ -437,6 +437,14 @@ class BreakGlassTrustTest(RunCase):
                                 for b in result["blockers"]), (principal, result["blockers"]))
 
 
+class TrustedPrincipalAccountsTest(RunCase):
+    def test_trusted_principal_accounts_are_a_doubt(self):
+        request_path, run = self.build("contained", name="vendor", trusted_principal_accounts=["123456789012"])
+        doubt = self.doubts(self.review(request_path, run), "needs acceptance")["trusted-accounts:principal-accounts"]
+        self.assertEqual(doubt["risk"], "Medium")
+        self.assertIn("123456789012", doubt["detail"])
+
+
 class PlatformTrustTest(RunCase):
     """Platform roles are exempt from the logging and recording guardrails: their trust is checked too."""
 

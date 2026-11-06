@@ -36,6 +36,7 @@ ACTION_REVIEW = SPEC.action_review
 ACCEPTED_RISKS = SPEC.accepted_risks
 
 EXCEPTION_ROLE = f"arn:aws:iam::{PREVIEW}:role/migration"
+TRUSTED_PRINCIPAL = "123456789012"  # a vendor outside the organization
 EXCEPTION = {"principal": EXCEPTION_ROLE, "control_id": "ATH-H-06", "owner": "team-analytics",
              "expires": "2099-01-31", "rationale": "workgroup migration"}
 
@@ -95,6 +96,11 @@ def build_scenarios():
     request, selected, generated = run_tier("hardened", registries["contained"], criticality="High",
                                             exceptions=[EXCEPTION])
     out["hardened-high-exception"] = Scenario("hardened-high-exception", request, selected, generated)
+    # A vendor account trusted to assume organization roles: ORG-C-09 then carries its aws:PrincipalAccount
+    # condition, which the proof and the mutants must cover too.
+    request, selected, generated = run_tier("hardened", registries["contained"],
+                                            trusted_principal_accounts=[TRUSTED_PRINCIPAL])
+    out["hardened-trusted-principal"] = Scenario("hardened-trusted-principal", request, selected, generated)
     return out
 
 
@@ -476,9 +482,13 @@ class NamedAttackTest(AdversarialTestCase):
     def test_named_trusted_principal_accounts_stay_trusted_and_others_do_not(self):
         vendor = {"principal": role(TRUSTED_VENDOR, "analyst", "o-otherorgid"), "action": "sts:AssumeRole",
                   "resource": f"arn:aws:iam::{PREVIEW}:role/analyst", "vpce": None}
-        self.assertTrue(self.scenarios["hardened"].decide(**vendor).allowed)
-        # Contained names no trusted principal account.
-        decision = self.scenarios["contained"].decide(**vendor)
+        self.assertTrue(self.scenarios["hardened-trusted-principal"].decide(**vendor).allowed)
+        # The journey's own requests name no trusted principal account.
+        decision = self.scenarios["hardened"].decide(**vendor)
+        self.assertEqual((decision.allowed, decision.statement), (False, "ORGC09"))
+        # Another outside account stays out even where the vendor is trusted.
+        other = dict(vendor, principal=role(EXTERNAL_ACCOUNT, "analyst", "o-otherorgid"))
+        decision = self.scenarios["hardened-trusted-principal"].decide(**other)
         self.assertEqual((decision.allowed, decision.statement), (False, "ORGC09"))
 
     def test_the_platform_role_changes_recording_and_nothing_else(self):

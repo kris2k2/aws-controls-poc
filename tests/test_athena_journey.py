@@ -70,8 +70,9 @@ def req(action, account=PREVIEW, region="ca-central-1", role="analyst", vpce=VPC
                    context=ctx)
 
 
-def run_tier(tier, registry=None, criticality=None, exceptions=None):
+def run_tier(tier, registry=None, criticality=None, exceptions=None, **overrides):
     data = load(f"request-{tier}.json")
+    data.update(overrides)
     if registry is not None:
         data["control_registry"] = registry
     if criticality:
