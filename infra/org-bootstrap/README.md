@@ -213,6 +213,26 @@ adding an account or a permission set.
 | KMS for the log bucket, S3 Object Lock | Cost and teardown friction in a test organization | Production organizations |
 | `BreakGlass-Responder` roles | Belong to the break-glass design the tool's ORG baseline protects | With the Validate stage |
 
+## Before the tool's guardrails go on
+
+The tool's ORG-S-02 denies changing Config recording to everyone but
+break-glass and the request's `platform_principals`
+([ADR-0014](../../docs/adr/0014-close-workload-escape-paths.md)). The
+Config StackSet deploys to each member account through the role
+CloudFormation creates there, `stacksets-exec-*`, which SCPs bind. So in
+every onboarding request for this organization:
+
+- list that role once per member account in `platform_principals`, as
+  `arn:aws:iam::<account-id>:role/stacksets-exec-*`;
+- give each role's ARN and trust policy in `org_state.roles`, so Review can
+  check who may assume it. Without one, Review asks a person.
+
+Otherwise the next StackSet update, or auto-deployment to a new account,
+fails on the deny. The management account's own stack needs nothing: SCPs
+don't bind the management account. Members also can't leave the
+organization (ORG-C-07), which teardown doesn't need: it closes accounts from
+the management account.
+
 ## Changing it
 
 Edit `organization.json` or a template in a pull request (tests:
