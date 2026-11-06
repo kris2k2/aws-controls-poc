@@ -30,14 +30,17 @@ acceptance template) and `blocked`.
 from __future__ import annotations
 
 import datetime as dt
+import fnmatch
 import hashlib
 import json
 from pathlib import Path
 
-from . import __version__, evaluator
+from . import __version__, calibration, evaluator
 from .catalog import load_index
 from .compose import ComposeError, compose
+from .detective import evaluate as evaluate_checks, matches as matches_event
 from .impact import MIN_WINDOW_DAYS
+from .specs import SpecError, load_spec
 from .controls import GUARDRAIL_TYPES, FindingsError, load_findings
 from .generate import ENDPOINT_BASE_ALLOW, MAX_POLICY_CHARS, GenerateError, generate, policy_size, text_sha256
 from .model import ControlClass, Criticality, Mode, Severity, Tier, _Ordered, mode_by_criticality
@@ -256,9 +259,20 @@ def check_verification(request: OnboardingRequest, run: dict, out: _Findings, pr
         out.block("verify", "run", failure)
     spec = result["spec"]
     if spec["status"] != "approved":
+        # One sign-off: the spec and every accepted risk in it, whichever tier they apply from, so
+        # the same acceptance holds across the journey until the spec itself changes.
+        try:
+            risks = [{"id": r.id, "controls": list(r.controls), "risk": r.risk, "reach": r.reach, "status": r.status}
+                     for r in sorted(load_spec(spec["service"]).accepted_risks, key=lambda r: r.id)]
+        except SpecError:
+            risks = result["accepted_risks"]
         out.doubt("security-spec", spec["service"], Risk.MEDIUM,
-                  f"proofs are against the {spec['service']} security spec, which is {spec['status']}",
-                  "the security spec says what each of these controls must deny", spec)
+                  f"proofs are against the {spec['service']} security spec, which is {spec['status']}, and its "
+                  f"accepted risks aren't signed off: " + "; ".join(f"{r['id']}: {r['risk']} Reach: {r['reach']}"
+                                                                  for r in risks),
+                  "the security spec says what each control must deny, and each of its accepted risks is "
+                  "acceptable as far as it reaches", {"spec": spec, "accepted_risks": risks})
+        return result["proofs"]
     for risk in result["accepted_risks"]:
         if risk["status"] == "approved":  # signed off in the spec, through its reviewed pull request
             continue
@@ -303,16 +317,137 @@ def check_evidence(request: OnboardingRequest, policies: dict, controls: dict, e
     if any(i["result"] == "fail" for i in items):
         out.block("evidence-calibration", "evaluator", "the local evaluator disagrees with AWS")
     elif not items:
-        out.doubt("calibration", "evaluator", Risk.MEDIUM,
-                  "proofs hold in the local evaluator's model of IAM, which hasn't been replayed against the "
-                  "IAM policy simulator and live calls", "I accept proofs that hold in the local evaluator's "
-                  "model of IAM until it is calibrated against AWS", EVALUATOR_SHA256)
+        # No live calibration: run the documented-behaviour suite here (never taken from outside).
+        documented = calibration.run()
+        for failure in documented["failed"]:
+            out.block("calibration", "evaluator", failure)
+        if not documented["failed"]:
+            out.doubt("calibration", "evaluator", Risk.LOW,
+                      f"proofs hold in the local evaluator's model of IAM, which agrees with "
+                      f"{len(documented['cases'])} behaviours AWS documents (checked {documented['checked']}) but "
+                      "hasn't been replayed against the IAM policy simulator and live calls; assumed but not "
+                      "documented: " + "; ".join(documented["undocumented"]),
+                      "I accept proofs that hold in the local evaluator's model of IAM, checked against AWS's "
+                      "documentation, until it is calibrated against live AWS",
+                      {"evaluator": EVALUATOR_SHA256, "cases": [c["id"] for c in documented["cases"]]})
     # Evidence bound to a statement that no longer exists, or changed since, or to another
     # evaluator: say so, don't use it.
     current = {sha256(stmt) for _, stmt in deny_statements(policies)} | {EVALUATOR_SHA256}
     return [{"kind": kind, "source": i["source"], "sid": i.get("sid")}
             for (kind, binding), items in sorted(index.items(), key=lambda kv: (kv[0][0], str(kv[0][1])))
             if binding not in current for i in items]
+
+
+DETECTIVE = ("config", "cloudtrail", "sentinel")
+
+
+def _global_keys_only(profile: dict | None) -> bool:
+    """The API contract offers only global condition keys, so no SCP can test a service setting."""
+    services = (profile or {}).get("services") or []
+    keys = [k.get("condition_key", "") for s in services for k in s.get("condition_keys", [])]
+    return bool(services) and all(k.startswith("aws:") for k in keys)
+
+
+def _vacuous(platform: str, impl: dict) -> bool:
+    """A definition that would pass, or match, anything: an empty resource passes it, an empty event matches it."""
+    if platform == "config" and "guard" in impl:
+        return evaluate_checks(impl["guard"]["checks"], {}, "config")
+    if platform == "sentinel" and "checks" in impl.get("plan", {}):
+        return evaluate_checks(impl["plan"]["checks"], {}, "sentinel")
+    if platform == "cloudtrail" and "match" in impl:
+        return matches_event(impl["match"], {})
+    return False
+
+
+def enforced_as_far_as_possible(record: dict, statuses: dict, profile: dict | None) -> bool:
+    """True when no guardrail can express the control and everything that can is deployed and real.
+
+    - no guardrail platform is planned: each is not applicable or, where the control claims no
+      condition key exists for it, the API contract confirms it offers only global keys;
+    - every planned Config rule, detection and Sentinel policy is generated, none pending;
+    - none of them is vacuous (passes an empty resource or matches an empty event).
+    Then nothing more can enforce it: asking a person adds no protection (finding F11)."""
+    impls = record["implementations"]
+    for platform in GUARDRAIL_TYPES:
+        status = impls[platform]["status"]
+        if status == "planned" or (status == "not_expressible" and not _global_keys_only(profile)):
+            return False
+    planned = [p for p in DETECTIVE if impls[p]["status"] == "planned"]
+    if not planned or any(statuses.get(p, {}).get("status") != "generated" for p in planned):
+        return False
+    return not any(_vacuous(p, impls[p]) for p in planned)
+
+
+def retirement_covered(cid: str, run: dict) -> bool:
+    """True when the retired control's deny only confined the service's own actions, and Compose now
+    confines them to the request's targets through the allow-list (an allow-list organization)."""
+    composition = run.get("composition") or {}
+    candidate = next((c for c in (run.get("findings") or {}).get("candidates", []) if c["control_id"] == cid), {})
+    actions = (candidate.get("guardrail") or {}).get("actions") or []
+    prefixes = set((run.get("generation") or {}).get("allow_list_prefixes", []))
+    return (composition.get("strategy") == "allow-list" and bool(actions)
+            and all(a.split(":", 1)[0] in prefixes for a in actions))
+
+
+def check_break_glass(request: OnboardingRequest, out: _Findings) -> None:
+    """Who can assume a break-glass role: checked from the trust policies in org_state, else a doubt.
+
+    Each role matching a break-glass pattern must trust only principals in the organization's accounts
+    (org_state.accounts): IAM principals with MFA required, or identity providers in those accounts;
+    never a wildcard, an outside account or a service. A violation blocks."""
+    patterns = list(request.break_glass_principals)
+    if not patterns:
+        return
+    org = request.org_state
+    accounts = {a.get("id") for a in org.get("accounts") or [] if isinstance(a, dict)}
+    roles = [r for r in org.get("roles") or [] if isinstance(r, dict) and isinstance(r.get("arn"), str)]
+    unchecked = [p for p in patterns if not any(fnmatch.fnmatchcase(r["arn"], p) for r in roles)]
+    if unchecked:
+        out.doubt("break-glass", "principals", Risk.MEDIUM,
+                  "break-glass roles are exempt from every guardrail but the data perimeter; who can assume "
+                  f"them is set by trust policies org_state doesn't give for {', '.join(unchecked)} (AR-04)",
+                  "the break-glass roles' trust policies admit only the intended responders", sorted(patterns))
+        return
+    for role in roles:
+        if not any(fnmatch.fnmatchcase(role["arn"], p) for p in patterns):
+            continue
+        for problem in trust_problems(role.get("trust_policy"), accounts):
+            out.block("break-glass", role["arn"], problem)
+
+
+def _account_of(principal: str) -> str | None:
+    if principal.isdigit() and len(principal) == 12:
+        return principal
+    parts = principal.split(":")
+    return parts[4] if len(parts) > 5 and parts[0] == "arn" else None
+
+
+def trust_problems(policy, accounts: set[str]) -> list[str]:
+    statements = (policy or {}).get("Statement") if isinstance(policy, dict) else None
+    if not isinstance(statements, list) or not statements:
+        return ["no trust policy to check"]
+    statements = [s for s in statements if isinstance(s, dict) and s.get("Effect") == "Allow"]
+    problems = []
+    for stmt in statements:
+        principal = stmt.get("Principal")
+        if principal == "*" or not isinstance(principal, dict):
+            problems.append("trusts any principal")
+            continue
+        conditions = stmt.get("Condition") or {}
+        mfa = any(str(v).lower() == "true" for op, keys in conditions.items() if op.startswith("Bool")
+                  for k, v in keys.items() if k.lower() == "aws:multifactorauthpresent")
+        for kind, values in principal.items():
+            for value in values if isinstance(values, list) else [values]:
+                account = _account_of(str(value))
+                if value == "*":
+                    problems.append(f"trusts any {kind} principal")
+                elif kind == "Service":
+                    problems.append(f"trusts the service {value}")
+                elif account not in accounts:
+                    problems.append(f"trusts {value}, outside the organization's accounts")
+                elif kind == "AWS" and not mfa:
+                    problems.append(f"trusts {value} without requiring MFA (aws:MultiFactorAuthPresent)")
+    return problems
 
 
 def severity_is_moot(record: dict, tier: Tier) -> bool:
@@ -343,8 +478,10 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
                       "the matrix change is ratified", text)
         elif text.startswith("inferred severity"):
             record = controls[cid]
-            if severity_is_moot(record, request.maturity_tier):
-                continue  # no severity would give this control another mode: nothing for a person to decide
+            if severity_is_moot(record, request.maturity_tier) or Mode(record["mode"]) is Mode.ENFORCE:
+                # Moot, or fail-safe: at Enforce an overstated severity can only over-enforce, which the
+                # impact replay (or its doubt) answers; it can't leave anything under-enforced.
+                continue
             out.doubt("inferred-severity", cid, Risk.MEDIUM,
                       f"{text} (rubric, not an AWS source) sets {cid}'s mode to {record['mode']}",
                       f"{record['severity']} is the right severity for {cid}",
@@ -361,6 +498,8 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
             # Only the promotion that lifts it: later tiers find it already lifted (and accepted).
             if not lifted_now(until.get(entry["control_id"]), request.maturity_tier):
                 continue
+            if retirement_covered(entry["control_id"], run):
+                continue
             out.doubt("retired", entry["control_id"], Risk.MEDIUM,
                       f"{entry['control_id']} stops applying on this promotion ({entry['reason']}): "
                       "its deny is lifted", "lifting this control is intended at this tier",
@@ -376,11 +515,7 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
                   {"principal": exc.principal, "control_id": exc.control_id, "owner": exc.owner,
                    "expires": exc.expires.isoformat(), "rationale": exc.rationale})
     if request.break_glass_principals:
-        out.doubt("break-glass", "principals", Risk.MEDIUM,
-                  "break-glass roles are exempt from every guardrail but the data perimeter; who can assume "
-                  "them is set by trust policies this tool doesn't check (AR-04)",
-                  "the break-glass roles' trust policies admit only the intended responders",
-                  sorted(request.break_glass_principals))
+        check_break_glass(request, out)
     if request.trusted_resource_accounts:
         out.doubt("trusted-accounts", "resource-accounts", Risk.MEDIUM,
                   "data may leave the organization to these accounts through the data perimeter: "
@@ -393,7 +528,8 @@ def check_selection(request: OnboardingRequest, run: dict, out: _Findings) -> No
             pending.append(cid)
         # Config rules and detections only detect; Sentinel stops only what Terraform plans.
         guarded = any(statuses.get(t, {}).get("status") == "generated" for t in GUARDRAIL_TYPES)
-        if Mode(controls[cid]["mode"]).enforcing and not guarded:
+        if Mode(controls[cid]["mode"]).enforcing and not guarded and not enforced_as_far_as_possible(
+                controls[cid], statuses, run.get("profile")):
             plan_time = statuses.get("sentinel", {}).get("status") == "generated"
             out.doubt("unenforced", cid, Risk.MEDIUM,
                       f"{cid} is selected as {controls[cid]['mode']}, but "

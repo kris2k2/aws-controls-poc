@@ -104,6 +104,48 @@
         "id": "444455556666",
         "ou": "Workloads/Analytics"
       }
+    ],
+    "roles": [
+      {
+        "arn": "arn:aws:iam::111122223333:role/BreakGlass-Responder",
+        "trust_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::111122223333:root"
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "Bool": {
+                  "aws:MultiFactorAuthPresent": "true"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "arn": "arn:aws:iam::444455556666:role/BreakGlass-Responder",
+        "trust_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::444455556666:root"
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "Bool": {
+                  "aws:MultiFactorAuthPresent": "true"
+                }
+              }
+            }
+          ]
+        }
+      }
     ]
   },
   "maker": "analyst-a",

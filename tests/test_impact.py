@@ -133,3 +133,27 @@ class RunWithCloudTrailTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DocumentedCalibrationTest(unittest.TestCase):
+    """The evaluator against AWS's documented behaviour (onboard/calibration.py)."""
+
+    def test_every_documented_case_holds(self):
+        from onboard import calibration
+        result = calibration.run()
+        self.assertEqual(result["result"], "pass", result["failed"])
+        self.assertTrue(all(c["url"].startswith("https://docs.aws.amazon.com/") for c in result["cases"]))
+
+    def test_the_suite_catches_a_wrong_evaluator(self):
+        from unittest import mock
+        from onboard import calibration, evaluator
+        real = evaluator._condition
+        wrong = {
+            "IfExists ignored": lambda op, k, e, keys: real(op.removesuffix("IfExists"), k, e, keys),
+            "negation ignored on a missing key": lambda op, k, e, keys: (
+                False if k.lower() not in keys and "Null" not in op and "IfExists" not in op else real(op, k, e, keys)),
+            "Null inverted": lambda op, k, e, keys: (not real(op, k, e, keys)) if op == "Null" else real(op, k, e, keys),
+        }
+        for name, fake in wrong.items():
+            with self.subTest(mutation=name), mock.patch.object(evaluator, "_condition", fake):
+                self.assertEqual(calibration.run()["result"], "fail", name)

@@ -98,20 +98,24 @@ class DecisionTest(RunCase):
         self.assertFalse([d for d in open_ if d.startswith("evidence-proof:")], "every deny is proved")
         # What is left about the proofs: the spec they are against isn't signed off, nor are its accepted risks.
         self.assertIn("security-spec:athena", open_)
-        self.assertEqual({d for d in open_ if d.startswith("accepted-risk:")},
-                         {"accepted-risk:AR-01", "accepted-risk:AR-02", "accepted-risk:AR-03", "accepted-risk:AR-05"})
+        # One question covers the spec and every accepted risk in it, whatever tier they apply from.
+        self.assertFalse([d for d in open_ if d.startswith("accepted-risk:")])
+        for ar in ("AR-01", "AR-02", "AR-03", "AR-04", "AR-05"):
+            self.assertIn(ar, open_["security-spec:athena"]["detail"])
         # Proofs say nothing about outages: organization-wide denies need impact replays, and they are High.
         self.assertEqual(result["residual_risk"], "High")
         self.assertEqual(open_["evidence-impact:scp-org-guardrails/ORGC01"]["risk"], "High")
         # On a new service nobody uses it yet, so its own denies break nothing running.
         self.assertNotIn("evidence-impact:scp-athena-guardrails/ATHC03", open_)
-        self.assertIn("calibration:evaluator", open_)
-        self.assertIn("break-glass:principals", open_)
+        # The evaluator agrees with every behaviour AWS documents, so calibration is Low (auto-accepted at
+        # Moderate): only replaying live calls would close it.
+        self.assertEqual(self.doubts(result)["calibration:evaluator"]["status"], "auto-accepted")
+        self.assertNotIn("break-glass:principals", open_)  # their trust policies are in org_state and pass
         self.assertEqual(len(result["acceptance_template"]["acceptances"]), len(open_))
         # The numbers in docs/simulations/athena-journey.md, section 6.
         # Nine inferred severities on containment controls aren't asked: containment is Enforce whatever
         # the severity, so the answer would change nothing.
-        self.assertEqual(result["counts"], {"needs acceptance": 13, "accepted": 0, "auto-accepted": 12})
+        self.assertEqual(result["counts"], {"needs acceptance": 7, "accepted": 0, "auto-accepted": 13})
         self.assertFalse([d for d in open_ if d.startswith("inferred-severity:")])
 
     def test_without_the_api_contract_nothing_is_proved(self):
@@ -175,12 +179,12 @@ class DecisionTest(RunCase):
         # With proofs, impact replays and calibration, what is left is judgement: break-glass, the security
         # spec and its accepted risks (Private Preview's severities can't change a containment control's mode).
         self.assertEqual({d["kind"] for d in self.doubts(first, "needs acceptance").values()},
-                         {"break-glass", "security-spec", "accepted-risk"})
+                         {"security-spec"})  # one sign-off: the spec and its accepted risks
         result = self.review(request_path, run, evidence=evidence, acceptances=accept_all(first))
         self.assertEqual(result["decision"], "release")
         self.assertIsNone(result["residual_risk"])
         self.assertEqual(result["acceptance_template"]["acceptances"], [])
-        accepted = self.doubts(result, "accepted")["break-glass:principals"]
+        accepted = self.doubts(result, "accepted")["security-spec:athena"]
         self.assertEqual(accepted["acceptance"]["accepted_by"], CHECKER)
         self.assertEqual(result["policy_set_sha256"], sha256(files["policies"]))
 
@@ -354,17 +358,93 @@ class PolicyCheckTest(unittest.TestCase):
         self.assertEqual(self.check({"p": {"Statement": [deny]}}), {("parameters", "p")})
 
 
+class WhatStaysWithAPersonTest(unittest.TestCase):
+    """The checks that replace questions don't over-reach."""
+
+    RECORD = {"implementations": {
+        "scp": {"status": "not_expressible", "reason": "no Athena condition key exposes workgroup settings"},
+        "rcp": {"status": "not_applicable", "reason": "x"}, "vpce": {"status": "not_applicable", "reason": "x"},
+        "boundary": {"status": "not_applicable", "reason": "x"},
+        "config": {"status": "planned", "guard": {"resource_type": "AWS::Athena::WorkGroup", "checks": [
+            {"path": ["WorkGroupConfiguration", "EnforceWorkGroupConfiguration"], "equals": True}]}},
+        "cloudtrail": {"status": "not_applicable", "reason": "x"},
+        "sentinel": {"status": "not_applicable", "reason": "x"}}}
+    GLOBAL = {"services": [{"condition_keys": [{"condition_key": "aws:RequestTag/${TagKey}"}]}]}
+    GENERATED = {"config": {"status": "generated"}}
+
+    def test_enforced_as_far_as_aws_allows(self):
+        from onboard.review import enforced_as_far_as_possible
+        self.assertTrue(enforced_as_far_as_possible(self.RECORD, self.GENERATED, self.GLOBAL))
+
+    def test_a_service_condition_key_means_a_guardrail_may_be_possible(self):
+        from onboard.review import enforced_as_far_as_possible
+        own_key = {"services": [{"condition_keys": [{"condition_key": "athena:EncryptionOption"}]}]}
+        self.assertFalse(enforced_as_far_as_possible(self.RECORD, self.GENERATED, own_key))
+
+    def test_a_vacuous_or_missing_artifact_keeps_the_question(self):
+        from onboard.review import enforced_as_far_as_possible
+        vacuous = copy.deepcopy(self.RECORD)
+        vacuous["implementations"]["config"]["guard"]["checks"] = [{"path": ["X"], "not_in": ["y"]}]
+        self.assertFalse(enforced_as_far_as_possible(vacuous, self.GENERATED, self.GLOBAL))
+        self.assertFalse(enforced_as_far_as_possible(self.RECORD, {"config": {"status": "pending"}}, self.GLOBAL))
+
+    def test_a_retirement_in_a_deny_list_organization_is_asked(self):
+        from onboard.review import retirement_covered
+        run = {"findings": {"candidates": [{"control_id": "ATH-C-01", "guardrail": {"actions": ["athena:*"]}}]},
+               "generation": {"allow_list_prefixes": ["athena", "glue"]}, "composition": {"strategy": "allow-list"}}
+        self.assertTrue(retirement_covered("ATH-C-01", run))
+        run["composition"]["strategy"] = "deny-list"
+        self.assertFalse(retirement_covered("ATH-C-01", run))
+
+
+class BreakGlassTrustTest(RunCase):
+    """Who can assume a break-glass role is checked from its trust policy, instead of asked."""
+
+    def review_with_trust(self, change=None, drop=False):
+        org = load("request-private-preview.json")["org_state"]
+        if drop:
+            org["roles"] = org["roles"][:1]
+        if change:
+            change(org["roles"][0]["trust_policy"]["Statement"][0])
+        request_path, run = self.build(name="bg", org_state=org)
+        return self.review(request_path, run)
+
+    def test_organization_principals_with_mfa_need_no_person(self):
+        self.assertNotIn("break-glass:principals", self.doubts(self.review_with_trust()))
+
+    def test_an_outside_account_blocks(self):
+        result = self.review_with_trust(lambda s: s.update(Principal={"AWS": "arn:aws:iam::999988887777:root"}))
+        self.assertEqual(result["decision"], "blocked")
+        self.assertTrue(any(b["check"] == "break-glass" and "outside the organization" in b["detail"]
+                            for b in result["blockers"]))
+
+    def test_no_mfa_or_a_wildcard_blocks(self):
+        for change, text in ((lambda s: s.pop("Condition"), "without requiring MFA"),
+                             (lambda s: s.update(Principal="*"), "trusts any principal"),
+                             (lambda s: s.update(Principal={"Service": "ec2.amazonaws.com"}), "trusts the service")):
+            result = self.review_with_trust(change)
+            self.assertTrue(any(text in b["detail"] for b in result["blockers"]), (text, result["blockers"]))
+
+    def test_a_role_it_cannot_see_is_still_asked(self):
+        self.assertIn("break-glass:principals", self.doubts(self.review_with_trust(drop=True), "needs acceptance"))
+
+
 class JourneyReviewTest(RunCase):
     def test_promotion_to_contained_surfaces_what_it_lifts_and_leaves_unenforced(self):
         result = self.review(*self.build("contained"))
         self.assertEqual(result["decision"], "hold")
         open_ = self.doubts(result, "needs acceptance")
-        self.assertIn("retired:ATH-C-01", open_)  # the preview-account restriction is lifted
+        # The preview-account restriction is lifted, but Compose confines Athena to the target OU through the
+        # allow-list, which is the containment ATH-C-01 gave: nothing for a person to decide.
+        self.assertNotIn("retired:ATH-C-01", open_)
         # Moving Athena to its target OU takes it away from the preview account.
         self.assertEqual(open_["removes-service:athena"]["risk"], "Medium")
         self.assertIn("trusted-accounts:resource-accounts", open_)
-        # Enforce with override and no exception deploys nothing (F11): a person decides if that is acceptable.
-        self.assertIn("unenforced:ATH-S-01", open_)
+        # ATH-S-01 can't have a guardrail (Athena has no condition key for workgroup settings) and its Config
+        # rule and Sentinel policy are generated: enforced as far as AWS allows (F11). ATH-S-04's Config rule
+        # isn't defined yet, so it still asks.
+        self.assertNotIn("unenforced:ATH-S-01", open_)
+        self.assertIn("unenforced:ATH-S-04", open_)
         # On a promotion, Athena's own denies reach workloads running in the preview, so they need impact replays.
         self.assertIn("evidence-impact:scp-athena-guardrails/ATHC03", open_)
 
