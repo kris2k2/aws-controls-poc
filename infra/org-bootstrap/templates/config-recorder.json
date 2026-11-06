@@ -1,0 +1,89 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Test organization (ADR-0013): the AWS Config recorder and delivery channel for one account and region, delivering to the log archive bucket. Deployed by org_bootstrap.py as stack org-bootstrap-config in the management account and as service-managed StackSet org-bootstrap-config in every member account.",
+  "Parameters": {
+    "LogBucketName": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+    },
+    "HomeRegion": {
+      "Type": "String",
+      "AllowedValues": ["ca-central-1", "us-east-1"],
+      "Description": "Global resource types (IAM) are recorded in this region only."
+    },
+    "RecordingFrequency": {
+      "Type": "String",
+      "AllowedValues": ["DAILY", "CONTINUOUS"],
+      "Description": "DAILY keeps an idle test organization near zero cost; CONTINUOUS when change-triggered rules must fire at once."
+    }
+  },
+  "Conditions": {
+    "IsHomeRegion": {"Fn::Equals": [{"Ref": "AWS::Region"}, {"Ref": "HomeRegion"}]}
+  },
+  "Resources": {
+    "RecorderRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {"Fn::Sub": "org-bootstrap-config-recorder-${AWS::Region}"},
+        "Path": "/org-bootstrap/",
+        "Description": "AWS Config recorder: reads resource configuration, writes to the log archive (ADR-0013).",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"Service": "config.amazonaws.com"},
+              "Action": "sts:AssumeRole",
+              "Condition": {"StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}}
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {"Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWS_ConfigRole"}
+        ],
+        "Policies": [
+          {
+            "PolicyName": "deliver-to-log-archive",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:PutObject",
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${LogBucketName}/AWSLogs/${AWS::AccountId}/Config/*"},
+                  "Condition": {"StringLike": {"s3:x-amz-acl": "bucket-owner-full-control"}}
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": ["s3:GetBucketAcl", "s3:ListBucket"],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${LogBucketName}"}
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "Recorder": {
+      "Type": "AWS::Config::ConfigurationRecorder",
+      "Properties": {
+        "Name": "default",
+        "RoleARN": {"Fn::GetAtt": ["RecorderRole", "Arn"]},
+        "RecordingGroup": {
+          "AllSupported": true,
+          "IncludeGlobalResourceTypes": {"Fn::If": ["IsHomeRegion", true, false]}
+        },
+        "RecordingMode": {"RecordingFrequency": {"Ref": "RecordingFrequency"}}
+      }
+    },
+    "DeliveryChannel": {
+      "Type": "AWS::Config::DeliveryChannel",
+      "DependsOn": "Recorder",
+      "Properties": {
+        "Name": "default",
+        "S3BucketName": {"Ref": "LogBucketName"},
+        "ConfigSnapshotDeliveryProperties": {"DeliveryFrequency": "TwentyFour_Hours"}
+      }
+    }
+  }
+}

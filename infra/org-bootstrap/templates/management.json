@@ -1,0 +1,95 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Test organization (ADR-0013): the organization CloudTrail trail, the monthly cost budget and the cost-tag policy, in the management account. Deployed by org_bootstrap.py as stack org-bootstrap-management.",
+  "Parameters": {
+    "TrailName": {
+      "Type": "String",
+      "AllowedPattern": "^[A-Za-z0-9._-]{3,128}$"
+    },
+    "LogBucketName": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$",
+      "Description": "The log archive bucket (stack org-bootstrap-log-archive in the log-archive account)."
+    },
+    "RootId": {
+      "Type": "String",
+      "AllowedPattern": "^r-[0-9a-z]{4,32}$",
+      "Description": "The organization root the tag policy is attached to."
+    },
+    "BudgetLimitUsd": {
+      "Type": "Number",
+      "MinValue": 1,
+      "MaxValue": 10000
+    },
+    "BudgetEmail": {
+      "Type": "String",
+      "AllowedPattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+      "Description": "Monitored mailbox for budget alerts. Given at apply time, never committed."
+    }
+  },
+  "Resources": {
+    "OrganizationTrail": {
+      "Type": "AWS::CloudTrail::Trail",
+      "Properties": {
+        "TrailName": {"Ref": "TrailName"},
+        "S3BucketName": {"Ref": "LogBucketName"},
+        "IsLogging": true,
+        "IsOrganizationTrail": true,
+        "IsMultiRegionTrail": true,
+        "IncludeGlobalServiceEvents": true,
+        "EnableLogFileValidation": true
+      }
+    },
+    "MonthlyBudget": {
+      "Type": "AWS::Budgets::Budget",
+      "Properties": {
+        "Budget": {
+          "BudgetName": "org-bootstrap-monthly",
+          "BudgetType": "COST",
+          "TimeUnit": "MONTHLY",
+          "BudgetLimit": {"Amount": {"Ref": "BudgetLimitUsd"}, "Unit": "USD"}
+        },
+        "NotificationsWithSubscribers": [
+          {
+            "Notification": {"NotificationType": "ACTUAL", "ComparisonOperator": "GREATER_THAN", "Threshold": 50, "ThresholdType": "PERCENTAGE"},
+            "Subscribers": [{"SubscriptionType": "EMAIL", "Address": {"Ref": "BudgetEmail"}}]
+          },
+          {
+            "Notification": {"NotificationType": "ACTUAL", "ComparisonOperator": "GREATER_THAN", "Threshold": 80, "ThresholdType": "PERCENTAGE"},
+            "Subscribers": [{"SubscriptionType": "EMAIL", "Address": {"Ref": "BudgetEmail"}}]
+          },
+          {
+            "Notification": {"NotificationType": "ACTUAL", "ComparisonOperator": "GREATER_THAN", "Threshold": 100, "ThresholdType": "PERCENTAGE"},
+            "Subscribers": [{"SubscriptionType": "EMAIL", "Address": {"Ref": "BudgetEmail"}}]
+          },
+          {
+            "Notification": {"NotificationType": "FORECASTED", "ComparisonOperator": "GREATER_THAN", "Threshold": 100, "ThresholdType": "PERCENTAGE"},
+            "Subscribers": [{"SubscriptionType": "EMAIL", "Address": {"Ref": "BudgetEmail"}}]
+          }
+        ]
+      }
+    },
+    "CostTagPolicy": {
+      "Type": "AWS::Organizations::Policy",
+      "Properties": {
+        "Name": "org-bootstrap-cost-tags",
+        "Description": "Report-only: the cost allocation tag keys every resource carries (project, env, owner) and the env values.",
+        "Type": "TAG_POLICY",
+        "TargetIds": [{"Ref": "RootId"}],
+        "Content": {
+          "tags": {
+            "project": {"tag_key": {"@@assign": "project"}},
+            "env": {
+              "tag_key": {"@@assign": "env"},
+              "tag_value": {"@@assign": ["test", "dev", "prod"]}
+            },
+            "owner": {"tag_key": {"@@assign": "owner"}}
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "TrailArn": {"Value": {"Fn::GetAtt": ["OrganizationTrail", "Arn"]}}
+  }
+}

@@ -40,5 +40,10 @@ the `governance-sync` workflow (or `python3 .governance/tools/governance.py sync
   the baseline: CDK (TypeScript) with `project-guardrails.ts`, home region
   `ca-central-1`, stacks named `aws-controls-poc` or `aws-controls-poc-*`, and
   CI access only through the project's bootstrap stack.
+- The test organization (ADR-0013) is bootstrapped by
+  `infra/org-bootstrap/`: a standard-library script (Python 3.9+, for
+  CloudShell) over the AWS CLI v2, plus JSON CloudFormation templates. An
+  administrator runs it, never CI; no emails or account IDs in its config.
+  Its SCPs and RCPs come from the tool, not from the bootstrap.
 - Checks: `python3 .governance/tools/governance.py ci` and
   `pre-commit run --all-files`.

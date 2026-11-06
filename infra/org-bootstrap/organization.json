@@ -1,0 +1,73 @@
+{
+  "schema": "org-bootstrap/v1",
+  "description": "Desired state of the test organization (ADR-0013). No email addresses or account IDs here: emails are given at apply time, IDs are read from AWS.",
+  "tags": {
+    "project": "aws-controls-poc",
+    "env": "test",
+    "owner": "aws-controls-poc-maintainers"
+  },
+  "home_region": "ca-central-1",
+  "config_regions": ["ca-central-1"],
+  "config_recording_frequency": "DAILY",
+  "policy_types": ["SERVICE_CONTROL_POLICY", "RESOURCE_CONTROL_POLICY", "TAG_POLICY"],
+  "trusted_access": [
+    "cloudtrail.amazonaws.com",
+    "config.amazonaws.com",
+    "config-multiaccountsetup.amazonaws.com",
+    "access-analyzer.amazonaws.com",
+    "iam.amazonaws.com"
+  ],
+  "root_access_features": ["RootCredentialsManagement", "RootSessions"],
+  "organizational_units": [
+    "Security",
+    "Sandbox",
+    "Sandbox/Preview",
+    "Workloads",
+    "Workloads/Analytics"
+  ],
+  "accounts": [
+    {"key": "log-archive", "name": "controls-poc-log-archive", "ou": "Security"},
+    {"key": "audit", "name": "controls-poc-audit", "ou": "Security"},
+    {"key": "preview", "name": "controls-poc-preview", "ou": "Sandbox/Preview"},
+    {"key": "analytics", "name": "controls-poc-analytics", "ou": "Workloads/Analytics"}
+  ],
+  "log_archive_account": "log-archive",
+  "audit_account": "audit",
+  "delegated_admin_services": [
+    "config.amazonaws.com",
+    "config-multiaccountsetup.amazonaws.com",
+    "access-analyzer.amazonaws.com"
+  ],
+  "identity_center": {
+    "permission_sets": [
+      {
+        "name": "AdministratorAccess",
+        "profile_suffix": "admin",
+        "description": "Full access, for administrators of the test organization",
+        "session_duration": "PT4H",
+        "managed_policies": ["arn:aws:iam::aws:policy/AdministratorAccess"]
+      },
+      {
+        "name": "ReadOnlyAccess",
+        "profile_suffix": "readonly",
+        "description": "Read-only access, for looking around without changing anything",
+        "session_duration": "PT8H",
+        "managed_policies": ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+      }
+    ],
+    "groups": [
+      {
+        "name": "controls-poc-admins",
+        "description": "Administrators of the aws-controls-poc test organization",
+        "accounts": "*",
+        "permission_sets": ["AdministratorAccess", "ReadOnlyAccess"]
+      }
+    ],
+    "admins_group": "controls-poc-admins",
+    "cli_session_name": "controls-poc",
+    "cli_profile_prefix": "controls-poc"
+  },
+  "log_retention_days": 365,
+  "trail_name": "org-bootstrap",
+  "budget_monthly_limit_usd": 25
+}
