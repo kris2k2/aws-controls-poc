@@ -1,4 +1,4 @@
-# ADR-0012: Replay CloudTrail for impact evidence, and stop asking people what can't change the outcome
+# ADR-0012: Replace review questions with checks: impact replay, trust policies, documented calibration
 
 - **Status:** proposed
 - **Date:** 2026-11-06
@@ -56,20 +56,71 @@ Three kinds of question didn't need a person:
    reads `impact.json` from the run, and Deliver bundles it with the other
    evidence.
 
+The owner then set a target of fewer than 5 human decisions for the whole
+journey. Each remaining question was checked for a test that answers it:
+
+7. **The spec is one sign-off.** The spec and every accepted risk in it,
+   whichever tier it applies from, are one question, fingerprinted on the
+   spec. One acceptance covers the journey until the spec changes. Once the
+   spec is approved, any accepted risk still unapproved is asked on its own,
+   as before.
+8. **Break-glass trust policies are checked, not asked.**
+   - `org_state.roles` gives each role's trust policy. Every role matching a
+     break-glass pattern may trust only principals in the organization's
+     accounts: IAM principals with `aws:MultiFactorAuthPresent` required, or
+     identity providers in those accounts.
+   - A wildcard principal, a service, an outside account or a missing MFA
+     condition blocks.
+   - A pattern with no role in `org_state` is still asked.
+9. **A severity at Enforce isn't asked.** At the strictest mode, an
+   overstated severity can only over-enforce, which is an outage, and the
+   impact replay (or its question) covers outages. It can't leave anything
+   under-enforced.
+10. **Enforced as far as AWS allows (decides F11).** An enforcing control
+    with no guardrail isn't asked about when all of these hold:
+    - no guardrail platform is planned;
+    - where the control says no condition key exists, the API contract
+      confirms the service offers only global keys;
+    - every planned Config rule, detection and Sentinel policy is
+      generated;
+    - none of them is vacuous: an empty resource fails it, and an empty event
+      doesn't match it.
+    Then nothing more can enforce it. Enforce with override, for such a
+    control, means its soft-mandatory Sentinel policy plus its detection.
+11. **A retirement covered by placement isn't asked.** In an allow-list
+    organization, a retired deny over the service's own actions is replaced
+    by Compose: the allow-list confines the service to the request's
+    targets. A deny-list organization is still asked.
+12. **Calibration against AWS's documentation.**
+    - `onboard/calibration.py` holds 18 cases, each quoted from an AWS
+      documentation page (checked 2026-11-06). They cover SCP levels, deny
+      precedence, RCP scope, condition operators with absent keys, IfExists,
+      Null, NotAction and the default endpoint policy.
+    - Review runs it itself. A failing case blocks. All passing lowers the
+      calibration question to Low: accepted automatically at Moderate, still a
+      person at High. Only replaying live calls closes it.
+    - Assumptions the pages don't state are listed in the question.
+    - A test mutates the evaluator three ways and the suite catches each.
+
 ## Consequences
 
 - Athena's journey, with 40 days of synthetic activity and acceptances
-  carried forward, needs 20 human decisions instead of 43: 7 at Private
-  Preview, 13 at Contained, none at Hardened.
-- What is left is judgement no evidence answers:
-  - the spec and its accepted risks (6);
-  - F11, whether Enforce with override may rest on a Sentinel policy (6);
-  - calibration (1), break-glass trust policies (1), the trusted resource
-    account (1), retiring the preview restriction (1), removing Athena from
-    the preview account (1);
-  - three supervision severities that do change a mode (3).
-  Signing off the spec, and deciding F11, would remove 12 of the 20 for
-  every later run.
+  carried forward, needs 4 human decisions instead of 43:
+  - the spec sign-off at Private Preview;
+  - the trusted resource account, removing Athena from the preview account,
+    and ATH-S-04 (its Config rule isn't defined yet) at Contained;
+  - nothing at Hardened.
+  At High criticality calibration is asked too: High accepts nothing
+  automatically.
+- What is left is judgement no test answers: whether the spec and its
+  risks are right, whether an outside account may receive data, and whether
+  taking the service from an account is intended. A Config definition for
+  ATH-S-04 would remove a fourth question.
+- `org_state.roles` is declared, like the rest of `org_state`: a wrong trust
+  policy there gives a wrong answer. Reading the roles from IAM needs
+  credentials and an ADR.
+- F11 is decided by rule 10. A control whose guardrail is possible but not
+  deployed (Enforce with override with no exception) is still asked.
 - The replay sees only what was logged. Read-only calls appear only if the
   trail records them, and S3 object calls only with data events. An API
   whose name differs from its IAM action can be missed (finding F3). The

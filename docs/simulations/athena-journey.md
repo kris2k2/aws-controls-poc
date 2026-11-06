@@ -276,9 +276,13 @@ supervision controls nothing but Sentinel enforces (F11), and impact replays
 for Athena's own denies, which the replay answers.
 
 Across the journey, with acceptances carried forward and the replay, a person
-makes 20 decisions (7, then 13, then none at Hardened), down from 43. Signing
-off the spec and its accepted risks, and deciding F11, would remove 12 of
-them for every later run. Any edited file, failed proof or unexpected Allow
+makes 4 decisions, down from 43 ([ADR-0012](../adr/0012-impact-replay-and-review-load.md)):
+the spec and its accepted risks, signed off once; and at Contained, the
+trusted account, removing Athena from the preview account, and ATH-S-04,
+whose Config rule isn't defined yet. Break-glass trust policies are checked
+from `org_state.roles`. Calibration is checked against 18 behaviours AWS
+documents (Low until live calls are replayed). Supervision severities at
+Enforce are fail-safe. ATH-C-01's retirement is covered by placement. Any edited file, failed proof or unexpected Allow
 **blocks**, and no acceptance overrides a blocker.
 
 ## 7. Findings for the spec and the tool
@@ -295,7 +299,7 @@ them for every later run. Any edited file, failed proof or unexpected Allow
 | F8 | `data_classification` had no mapping to criticality. | Partly decided | Internal Restricted is the classification behind the Moderate default (decided 2026-10-30); Public and Internal imply Low. A classification raises criticality, never lowers it. Labels above Internal Restricted (for example Confidential, the spec's own example) still need a decision; a request using one fails until then. |
 | F9 | **S3 requests made through Athena can't be restricted by `aws:SourceVpce` or `aws:SourceIp`.** | Verified, new | An S3 network perimeter must exempt calls via Athena (`aws:CalledVia`). Recorded as a blind spot on ATH-C-04. |
 | F10 | **The preview restriction must retire on promotion**, but the spec says tiers are cumulative. | Implemented | `until_tier` on a candidate: the control applies until that tier, and the next tier's `selection.json` lists it as retired. |
-| F11 | Most supervision controls are Enforce with override with no guardrail. "Override" then only means the Sentinel soft-mandatory path. | Implemented, to confirm | Generate renders Enforce with override as `soft-mandatory` (ADR-0009), and Review still doubts an enforcing control with no guardrail. Confirm this is the intended meaning for configuration controls. |
+| F11 | Most supervision controls are Enforce with override with no guardrail. "Override" then only means the Sentinel soft-mandatory path. | Decided by rule | Generate renders Enforce with override as `soft-mandatory` (ADR-0009). Review asks no person when no guardrail can express the control (confirmed by the API contract) and its Config rule, detection and Sentinel policy are generated and not vacuous (ADR-0012). |
 | F12 | **Break-glass exemptions could be matched or created by an attacker.** A wildcard account matched roles outside the organization (RCP bypass), and nothing stopped a member creating a `BreakGlass-*` role. | Fixed | Break-glass and exception principals must be role ARNs in a 12-digit account. New shared control ORG-C-04 denies the IAM role changes (and `iam:PassRole`) on every exempt role to everyone but break-glass. |
 | F13 | **ATH-C-03's deny list was hand-picked** and missed two Spark actions. | Fixed | Every capability action in the contract is classified in `onboard/specs/athena-action-review.json` (pending security review); the guardrail denies the reviewed list. |
 | F14 | **Break-glass could move data out of the organization**: it was exempt from the S3 resource perimeter (ORG-C-02). Its reach is set by trust policies the tool doesn't check. | Fixed, pending sign-off | Guardrails can set `break_glass_exempt: false`; the data perimeter (ORG-C-02, ORG-C-03) does. Checking break-glass trust policies is open. |
