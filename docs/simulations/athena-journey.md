@@ -252,23 +252,33 @@ At Private Preview, with no evidence supplied, the run **holds**:
 
 | Doubts | Risk | Status at Moderate (ceiling Low) |
 |---|---|---|
-| No impact replay for each of the 6 organization-wide denies (Athena's own need none: nobody uses Athena yet) | High | needs a person (6) |
-| Inferred High or Critical severity (9 controls), evaluator not calibrated, break-glass trust policies unchecked | Medium | needs a person (11) |
+| No impact replay for each of the 6 organization-wide denies (Athena's own need none: nobody uses Athena yet) | High | needs a person (6), or answered by `onboard impact` |
+| Evaluator not calibrated, break-glass trust policies unchecked | Medium | needs a person (2) |
 | The security spec isn't signed off; accepted risks AR-01, AR-02, AR-03 and AR-05 aren't signed off | Medium | needs a person (5) |
 | Enforce on inferred mappings only (10 controls), detective artifacts pending | Low | accepted by the reviewer (11) |
 
-With impact and calibration evidence for every statement (synthetic in the
-tests, since no stage produces it yet), what is left is judgement: the
-severities, break-glass, the spec and its accepted risks. Once a person other
+The 9 inferred High and Critical severities are no longer asked: every
+Private Preview control is containment, which is Enforce whatever its
+severity, so the answer would change nothing ([ADR-0012](../adr/0012-impact-replay-and-review-load.md)).
+`onboard impact` replays CloudTrail through every deny and answers the impact
+questions from the organization's own activity: with 40 days of normal
+activity, none of the 6 is left. With that evidence and calibration, what is
+left is judgement: break-glass, the spec and its accepted risks. Once a person other
 than the maker accepts those, the run **releases**. The next run releases on
 its own while nothing changes. Opening a region changes ORG-C-01's statement:
 Verify proves it again on its own, and only its impact replay comes back to a
 person. Findings that weaken a guardrail (a Spark action dropped from
 ATH-C-03) are reproduced faithfully by Select and Generate, and blocked by the
 proof. The promotion to Contained adds doubts for the lifted
-preview restriction (ATH-C-01 retired), the trusted resource account, the
-supervision controls nothing enforces yet (F11), and impact replays for
-Athena's own denies. Any edited file, failed proof or unexpected Allow
+preview restriction (ATH-C-01 retired, asked only on this promotion), the
+trusted resource account, removing Athena from the preview account, the
+supervision controls nothing but Sentinel enforces (F11), and impact replays
+for Athena's own denies, which the replay answers.
+
+Across the journey, with acceptances carried forward and the replay, a person
+makes 20 decisions (7, then 13, then none at Hardened), down from 43. Signing
+off the spec and its accepted risks, and deciding F11, would remove 12 of
+them for every later run. Any edited file, failed proof or unexpected Allow
 **blocks**, and no acceptance overrides a blocker.
 
 ## 7. Findings for the spec and the tool

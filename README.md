@@ -21,7 +21,7 @@ Decisions: [`docs/adr/`](docs/adr/). Threat model:
 | 3. Select | Done: tier scope, modes, retirement on promotion, registry reuse and escalation, checker items, next tier; every NIST SP 800-53 identifier resolved in the pinned OSCAL catalog |
 | 4. Generate | Partial: SCP and RCP guardrails, the allow-list, and the baseline VPC endpoint policy ([ADR-0004](docs/adr/0004-baseline-vpc-endpoint-policy.md)); Config rules, EventBridge detections of CloudTrail events and Sentinel policies from each control's structured definition ([ADR-0009](docs/adr/0009-detective-and-plan-time-artifacts.md)), checked by a local evaluator but not yet run in AWS Config, EventBridge or Sentinel. Permissions boundaries, and implementations with no structured definition, are reported as pending |
 | Verify | Done for Athena: each generated deny proved against its security property over the attacker model, with mutation testing; writes `verification.json` ([ADR-0006](docs/adr/0006-verify-stage.md)). A new service needs its own spec in `onboard/specs/` |
-| Review | Partial: a deterministic release decision (release, hold or blocked) from a reproduction check, its own run of Verify, checks on the policies, statement-bound impact and calibration evidence, and fingerprinted human acceptances ([ADR-0005](docs/adr/0005-risk-based-release-review.md)). No stage produces impact or calibration evidence yet, so runs hold |
+| Review | Partial: a deterministic release decision (release, hold or blocked) from a reproduction check, its own run of Verify, checks on the policies, statement-bound impact and calibration evidence, and fingerprinted human acceptances ([ADR-0005](docs/adr/0005-risk-based-release-review.md)). `onboard impact` replays 30 days or more of CloudTrail for the impact evidence; questions whose answer can't change the outcome aren't asked ([ADR-0012](docs/adr/0012-impact-replay-and-review-load.md)). Calibration needs AWS, so runs still hold on it |
 | Run · Deliver | Done: `onboard run` takes a request through every stage; on release, Deliver re-runs Review and writes a sealed bundle (the reviewed policies and detective artifacts, their evidence and a hashed manifest) that `onboard check-delivery` checks ([ADR-0008](docs/adr/0008-run-and-sealed-delivery.md)). Deploys nothing |
 | Report | Done: `report.html` at the end of every run, held and blocked included: the service, its threat vectors with their coverage, accepted risks and blind spots, the implemented guardrails with their proofs, and the release review; self-contained, no scripts, sealed in the delivery bundle ([ADR-0010](docs/adr/0010-visual-service-report.md)) |
 | 5. Compose | Done: places every policy in the OU tree from `org_state` (allow-list on every level to each target and below it, guardrails on the targets, organization guardrails on the root), checks AWS Organizations' quotas across every service's attachments, and diffs against `org_state` in a safe apply order; Review reproduces it and blocks over budget ([ADR-0011](docs/adr/0011-compose-stage.md)). `org_state` is declared, not read from AWS |
@@ -42,6 +42,10 @@ python3 -m onboard run request.json --out runs/bedrock --overlay overlay.json --
 python3 -m onboard check-delivery runs/bedrock/delivery  # what a deployment pipeline runs first
 ```
 
+Add `--cloudtrail trail.json` (30 days or more of the organization trail) to
+replay recent activity through every deny: Review then needs no person to
+confirm that a deny breaks no running workload ([ADR-0012](docs/adr/0012-impact-replay-and-review-load.md)).
+
 Every run ends with `runs/bedrock/report.html`, a visual summary of the
 service, its threat vectors and its implemented guardrails (also in the
 bundle on delivery).
@@ -57,6 +61,7 @@ python3 -m onboard assess request.json --run runs/bedrock --control-catalog-snap
 python3 -m onboard select request.json --findings runs/bedrock/findings.json --out runs/bedrock
 python3 -m onboard generate request.json --run runs/bedrock  # org-policies/ and detective/ (Config, EventBridge, Sentinel)
 python3 -m onboard compose request.json --run runs/bedrock  # composition.json: placement, quotas, diff against org_state; exit 0 fits, 4 over budget
+python3 -m onboard impact request.json --run runs/bedrock --cloudtrail trail.json  # impact.json: which denies would break recent calls
 python3 -m onboard verify request.json --run runs/bedrock  # needs the service's spec in onboard/specs/ (Athena so far) and resolve's output in the run; exit 0 pass, 4 fail
 python3 -m onboard review request.json --run runs/bedrock --acceptances acceptances.json  # exit 0 release, 3 hold, 4 blocked
 python3 -m onboard deliver request.json --run runs/bedrock --acceptances acceptances.json  # reviews again; on release writes runs/bedrock/delivery
