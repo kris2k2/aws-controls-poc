@@ -20,6 +20,7 @@ from .controls import FindingsError, load_findings
 from .deliver import DeliverError, check_delivery, deliver, manifest_sha256
 from .compose import ComposeError, compose
 from .generate import GenerateError, generate
+from .impact import MIN_WINDOW_DAYS, ImpactError, load_records, replay, source_of
 from .report import ReportError, load as load_report, render as render_report
 from .request import RequestError, parse_request
 from .resolve import ResolveError, resolve
@@ -202,6 +203,29 @@ def cmd_compose(args) -> int:
     return 0 if result["result"] == "fits" else 4
 
 
+def cmd_impact(args) -> int:
+    request = _load_request(args.request)
+    run = Path(args.run)
+    sources = [(p, Path(p).read_bytes()) for p in args.cloudtrail]
+    records = [r for _, raw in sources for r in load_records(raw)]
+    policies = {p.stem: _read_json(p) for p in sorted((run / "org-policies").glob("*.json"))}
+    result = replay(policies, _read_json(run / "composition.json"), request.org_state, records,
+                    source=source_of(sources))
+    _write_json(run / "impact.json", {**result["evidence"], "replay": result["report"]})
+    report, items = result["report"], result["evidence"]["items"]
+    counts = {r: sum(i["result"] == r for i in items) for r in ("pass", "fail")}
+    unknown = len(report["statements"]) - len(items)
+    print(f"Replayed {report['calls']} calls over {report['window']['days']:.0f} days through "
+          f"{len(report['statements'])} denies: {counts['pass']} break nothing, {counts['fail']} would deny calls, "
+          f"{unknown} undetermined; wrote {run / 'impact.json'}")
+    if not report["enough_history"]:
+        print(f"  the window is under {MIN_WINDOW_DAYS} days: Review won't use this evidence")
+    for item in items:
+        if item["result"] == "fail":
+            print(f"  {item['policy']}/{item['sid']}: {item['detail']}")
+    return 0
+
+
 # Exit codes for `review`, so a pipeline can gate on them.
 REVIEW_EXIT = {"release": 0, "hold": 3, "blocked": 4}
 
@@ -214,6 +238,8 @@ def _review(args) -> tuple[dict, list[Path]]:
     paths = [Path(e) for e in args.evidence or []]
     if not paths and (run / "evidence.json").exists():
         paths = [run / "evidence.json"]
+    if (run / "impact.json").exists() and run / "impact.json" not in paths:
+        paths.append(run / "impact.json")  # the run's own CloudTrail replay (onboard impact)
     evidence = [doc for doc in (load_optional(p, EVIDENCE_SCHEMA, problems) for p in paths) if doc is not None]
     acceptances = load_optional(Path(args.acceptances) if args.acceptances else None, ACCEPTANCES_SCHEMA, problems)
     result = review(request, files, evidence=evidence, acceptances=acceptances,
@@ -287,7 +313,7 @@ class RunError(ValueError):
 
 # Files and directories the pipeline writes into a run, so a re-run starts clean.
 RUN_OUTPUTS = ("capability-profile.json", "findings.json", "assessment.json", "selection.json", "registry.json",
-               "generation.json", "composition.json", "verification.json", "review.json", "run.json", "report.html")
+               "generation.json", "composition.json", "impact.json", "verification.json", "review.json", "run.json", "report.html")
 RUN_OUTPUT_DIRS = ("controls", "org-policies", "detective", "delivery")
 
 
@@ -322,6 +348,8 @@ def cmd_run(args) -> int:
         ("generate", cmd_generate, Namespace(request=args.request, run=str(run))),
         ("verify", cmd_verify, Namespace(request=args.request, run=str(run))),
         ("compose", cmd_compose, Namespace(request=args.request, run=str(run))),
+        *((("impact", cmd_impact, Namespace(request=args.request, run=str(run), cloudtrail=args.cloudtrail)),)
+          if args.cloudtrail else ()),
         ("review and deliver", cmd_deliver, Namespace(**common, run=str(run), evidence=args.evidence,
                                                       acceptances=args.acceptances, delivery=None)),
     )
@@ -454,6 +482,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run", required=True, help="run directory written by generate")
     p.set_defaults(func=cmd_compose)
 
+    p = sub.add_parser("impact", help="Impact: replay CloudTrail records through every deny the run deploys and "
+                                      "write impact.json, the evidence Review needs instead of a person's check")
+    p.add_argument("request", help="request JSON file")
+    p.add_argument("--run", required=True, help="run directory written by compose")
+    p.add_argument("--cloudtrail", required=True, action="append",
+                   help="CloudTrail log file ({\"Records\": [...]}) covering at least 30 days; repeatable")
+    p.set_defaults(func=cmd_impact)
+
     p = sub.add_parser("report", help="Report: write report.html, a visual summary of the service, its threat "
                                       "vectors and implemented guardrails, from a run directory")
     p.add_argument("--run", required=True, help="run directory written by select and generate (and verify, review)")
@@ -470,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--control-catalog-snapshot", help="replay the Control Catalog from this snapshot directory")
     source.add_argument("--record-snapshot", help="also save the live Control Catalog responses to this directory")
     p.add_argument("--evidence", action="append", help="impact or calibration evidence (evidence/v1); repeatable")
+    p.add_argument("--cloudtrail", action="append",
+                   help="CloudTrail log file to replay through the denies (onboard impact) before review; repeatable")
     p.add_argument("--acceptances", help="human acceptances of the doubts a previous run held on (acceptances/v1)")
     p.add_argument("--catalog", default=str(PINNED_INDEX), help="NIST SP 800-53 catalog index (default: the pinned one)")
     p.set_defaults(func=cmd_run)
@@ -478,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (RequestError, ResolveError, SourceError, FindingsError, SelectError, GenerateError,
-            CatalogError, VerifyError, AssessError, DeliverError, RunError, ReportError, ComposeError) as exc:
+            CatalogError, VerifyError, AssessError, DeliverError, RunError, ReportError, ComposeError,
+            ImpactError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
