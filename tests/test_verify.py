@@ -188,8 +188,8 @@ class VerifyCliTest(unittest.TestCase):
             self.assertEqual(main(["verify", str(request), "--run", str(run)]), 0)
             report = json.loads((run / "verification.json").read_text())
             self.assertEqual(report["result"], "pass")
-            self.assertEqual(len(report["proofs"]), 10)
-            self.assertIn("PASS: 10 of 10 statements proved", out.getvalue())
+            self.assertEqual(len(report["proofs"]), 13)
+            self.assertIn("PASS: 13 of 13 statements proved", out.getvalue())
             policy = run / "org-policies" / "scp-athena-guardrails.json"
             doc = json.loads(policy.read_text())
             doc["Statement"][2]["Action"].remove("athena:UpdateNotebook")

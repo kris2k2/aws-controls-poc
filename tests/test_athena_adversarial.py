@@ -36,6 +36,7 @@ ACTION_REVIEW = SPEC.action_review
 ACCEPTED_RISKS = SPEC.accepted_risks
 
 EXCEPTION_ROLE = f"arn:aws:iam::{PREVIEW}:role/migration"
+TRUSTED_PRINCIPAL = "123456789012"  # a vendor outside the organization
 EXCEPTION = {"principal": EXCEPTION_ROLE, "control_id": "ATH-H-06", "owner": "team-analytics",
              "expires": "2099-01-31", "rationale": "workgroup migration"}
 
@@ -95,6 +96,11 @@ def build_scenarios():
     request, selected, generated = run_tier("hardened", registries["contained"], criticality="High",
                                             exceptions=[EXCEPTION])
     out["hardened-high-exception"] = Scenario("hardened-high-exception", request, selected, generated)
+    # A vendor account trusted to assume organization roles: ORG-C-09 then carries its aws:PrincipalAccount
+    # condition, which the proof and the mutants must cover too.
+    request, selected, generated = run_tier("hardened", registries["contained"],
+                                            trusted_principal_accounts=[TRUSTED_PRINCIPAL])
+    out["hardened-trusted-principal"] = Scenario("hardened-trusted-principal", request, selected, generated)
     return out
 
 
@@ -297,11 +303,20 @@ RISK_PINS = {
               (({"action": "s3:PutObject", "principal": "break-glass", "resource_org": adversary.OTHER_ORG},
                 "ORGC02"),)),
     "AR-05": (("private-preview", "contained", "hardened"),
-              {"principal": "external", "action": "s3:PutObject", "resource_org": adversary.OTHER_ORG, "vpce": None},
+              ({"principal": "external", "action": "s3:PutObject", "resource_org": adversary.OTHER_ORG, "vpce": None},
+               # Organization credentials, off the endpoints, to an outside resource of a service other than S3
+               # (the test organization's allow-list opens Glue, not SQS or SNS).
+               {"action": "glue:CreateTable", "resource_org": adversary.OTHER_ORG, "resource_account": EXTERNAL_ACCOUNT,
+                "vpce": None}),
               (({"principal": "external", "action": "s3:PutObject", "resource_org": adversary.OTHER_ORG,
                  "vpce": "vpce-0example2222222222"}, "ORGC05"),
                ({"principal": "anonymous", "action": "s3:PutObject", "resource_org": None,
-                 "vpce": "vpce-0example2222222222"}, "ORGC05"))),
+                 "vpce": "vpce-0example2222222222"}, "ORGC05"),
+               ({"action": "glue:CreateTable", "resource_org": adversary.OTHER_ORG, "resource_account": EXTERNAL_ACCOUNT,
+                 "vpce": "vpce-0example2222222222"}, "ORGC06"),
+               # They can't become outside principals to go further: no roles outside the organization.
+               ({"action": "sts:AssumeRole", "resource_org": adversary.OTHER_ORG, "resource_account": EXTERNAL_ACCOUNT,
+                 "vpce": None}, "ORGC08"))),
 }
 
 
@@ -335,11 +350,11 @@ class AcceptedRiskTest(AdversarialTestCase):
 
     def test_each_accepted_gap_is_open_exactly_as_registered(self):
         for risk in ACCEPTED_RISKS:
-            tiers, request, _ = RISK_PINS[risk.id]
-            for tier in tiers:
+            tiers, requests, _ = RISK_PINS[risk.id]
+            for tier, request in ((t, r) for t in tiers for r in (requests if isinstance(requests, tuple) else (requests,))):
                 sc = self.scenarios[tier]
                 overrides = self.resolve(sc, request)
-                with self.subTest(risk=risk.id, tier=tier):
+                with self.subTest(risk=risk.id, tier=tier, action=request.get("action")):
                     decision = sc.decide(**overrides)
                     self.assertTrue(decision.allowed, f"{risk.id} is closed now ({decision.statement}): "
                                                       "update the register")
@@ -413,6 +428,37 @@ ATTACKS = (
     ("A20", "hardened", "the same into a standalone account, where aws:ResourceOrgID is absent",
      {"action": "glue:CreateTable", "resource_org": None, "resource_account": STANDALONE_ACCOUNT,
       "vpce": S3_ENDPOINT}, "ORGC06"),
+    # Workload IAM permissions used to step outside the guardrails.
+    ("A21", "private-preview", "a member takes its account out of the organization, and every SCP and RCP with it",
+     {"action": "organizations:LeaveOrganization"}, "ORGC07"),
+    ("A22", "hardened", "a break-glass session takes its account out of the organization",
+     {"principal": role(PREVIEW, "BreakGlass-Responder", ORG), "action": "organizations:LeaveOrganization"},
+     "ORGC07"),
+    ("A23", "hardened", "a member assumes a role in its own outside account, off the endpoints, to leave the SCPs "
+     "behind", {"action": "sts:AssumeRole", "resource": f"arn:aws:iam::{EXTERNAL_ACCOUNT}:role/analyst",
+                "resource_org": "o-otherorgid", "resource_account": EXTERNAL_ACCOUNT, "vpce": None}, "ORGC08"),
+    ("A24", "hardened", "the same into a standalone account, where aws:ResourceOrgID is absent",
+     {"action": "sts:AssumeRole", "resource_org": None, "resource_account": STANDALONE_ACCOUNT, "vpce": None},
+     "ORGC08"),
+    ("A25", "hardened", "an outside account assumes an organization role a member made it trust",
+     {"principal": role(EXTERNAL_ACCOUNT, "analyst", "o-otherorgid"), "action": "sts:AssumeRole",
+      "resource": f"arn:aws:iam::{PREVIEW}:role/analyst", "vpce": None}, "ORGC09"),
+    ("A26", "hardened", "an outside account reads a secret a member shared through its resource policy",
+     {"principal": role(EXTERNAL_ACCOUNT, "analyst", "o-otherorgid"), "action": "secretsmanager:GetSecretValue",
+      "vpce": None}, "ORGC09"),
+    ("A27", "hardened", "an anonymous caller reads a queue a member made public",
+     {"principal": ANONYMOUS, "action": "sqs:ReceiveMessage", "vpce": None}, "ORGC09"),
+    ("A28", "contained", "a member overwrites the Config recorder so it records nothing",
+     {"action": "config:PutConfigurationRecorder"}, "ORGS02"),
+    ("A29", "contained", "a member points the Config delivery channel at another bucket",
+     {"action": "config:PutDeliveryChannel"}, "ORGS02"),
+    ("A30", "contained", "a member creates a trail that delivers the account's events outside the organization",
+     {"action": "cloudtrail:CreateTrail"}, "ORGS01"),
+    ("A31", "contained", "a member creates a role named like the platform role to change recording",
+     {"action": "iam:CreateRole", "resource": f"arn:aws:iam::{PREVIEW}:role/stacksets-exec-x"}, "ORGC04"),
+    ("A32", "contained", "a role named like the platform role in an account on no list changes recording",
+     {"principal": role(ORG_ACCOUNT_ON_NO_LIST, "stacksets-exec-x", ORG), "action": "config:PutConfigurationRecorder"},
+     "ORGS02"),
 )
 
 
@@ -432,6 +478,31 @@ class NamedAttackTest(AdversarialTestCase):
         # Private Preview names no trusted account, so the vendor is outside the perimeter there.
         decision = self.scenarios["private-preview"].decide(**vendor)
         self.assertEqual((decision.allowed, decision.statement), (False, "ORGC02"))
+
+    def test_named_trusted_principal_accounts_stay_trusted_and_others_do_not(self):
+        vendor = {"principal": role(TRUSTED_VENDOR, "analyst", "o-otherorgid"), "action": "sts:AssumeRole",
+                  "resource": f"arn:aws:iam::{PREVIEW}:role/analyst", "vpce": None}
+        self.assertTrue(self.scenarios["hardened-trusted-principal"].decide(**vendor).allowed)
+        # The journey's own requests name no trusted principal account.
+        decision = self.scenarios["hardened"].decide(**vendor)
+        self.assertEqual((decision.allowed, decision.statement), (False, "ORGC09"))
+        # Another outside account stays out even where the vendor is trusted.
+        other = dict(vendor, principal=role(EXTERNAL_ACCOUNT, "analyst", "o-otherorgid"))
+        decision = self.scenarios["hardened-trusted-principal"].decide(**other)
+        self.assertEqual((decision.allowed, decision.statement), (False, "ORGC09"))
+
+    def test_the_platform_role_changes_recording_and_nothing_else(self):
+        sc = self.scenarios["contained"]
+        platform = role(PREVIEW, "stacksets-exec-0a1b2c3d4e5f", ORG)
+        for action in ("config:PutConfigurationRecorder", "config:PutDeliveryChannel", "cloudtrail:CreateTrail"):
+            with self.subTest(action=action):
+                self.assertTrue(sc.decide(principal=platform, action=action).allowed)
+        for overrides, sid in (({"action": "organizations:LeaveOrganization"}, "ORGC07"),
+                               ({"action": "athena:StartSession"}, "ATHC03"),
+                               ({"action": "s3:PutObject", "resource_org": "o-otherorgid"}, "ORGC02")):
+            with self.subTest(action=overrides["action"]):
+                decision = sc.decide(principal=platform, **overrides)
+                self.assertEqual((decision.allowed, decision.statement), (False, sid))
 
     def test_legitimate_break_glass_still_works(self):
         sc = self.scenarios["hardened"]

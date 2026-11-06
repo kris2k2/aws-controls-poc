@@ -46,7 +46,7 @@ class ImpactTest(RunCase):
         self.cli(normal_activity())
         after = self.doubts(self.review_with_impact(), "needs acceptance")
         asked = {d for d in before if d.startswith("evidence-impact:")}
-        self.assertEqual(len(asked), 6)
+        self.assertEqual(len(asked), 9)  # one per organization deny statement
         self.assertFalse({d for d in after if d.startswith("evidence-impact:")})
 
     def test_a_deny_that_would_break_a_running_call_blocks(self):

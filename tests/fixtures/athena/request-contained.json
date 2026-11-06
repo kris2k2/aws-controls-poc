@@ -114,7 +114,7 @@
             {
               "Effect": "Allow",
               "Principal": {
-                "AWS": "arn:aws:iam::111122223333:root"
+                "AWS": "arn:aws:iam::111122223333:role/incident-responder"
               },
               "Action": "sts:AssumeRole",
               "Condition": {
@@ -134,7 +134,7 @@
             {
               "Effect": "Allow",
               "Principal": {
-                "AWS": "arn:aws:iam::444455556666:root"
+                "AWS": "arn:aws:iam::444455556666:role/incident-responder"
               },
               "Action": "sts:AssumeRole",
               "Condition": {
@@ -142,6 +142,21 @@
                   "aws:MultiFactorAuthPresent": "true"
                 }
               }
+            }
+          ]
+        }
+      },
+      {
+        "arn": "arn:aws:iam::111122223333:role/stacksets-exec-0a1b2c3d4e5f",
+        "trust_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::444455556666:role/platform-deployer"
+              },
+              "Action": "sts:AssumeRole"
             }
           ]
         }
@@ -167,5 +182,8 @@
   ],
   "trusted_resource_accounts": [
     "123456789012"
+  ],
+  "platform_principals": [
+    "arn:aws:iam::111122223333:role/stacksets-exec-*"
   ]
 }

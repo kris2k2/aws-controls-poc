@@ -47,6 +47,7 @@ _KNOWN_FIELDS = {
     "regulatory_profile", "jurisdictions", "allowed_regions", "framework_profile",
     "capabilities_excluded", "exceptions", "break_glass_principals", "source_pins",
     "run_mode", "non_production_attested", "decisions", "trusted_resource_accounts",
+    "platform_principals", "trusted_principal_accounts",
 }
 _EXCEPTION_FIELDS = ("principal", "control_id", "owner", "expires", "rationale")
 
@@ -94,6 +95,13 @@ class OnboardingRequest:
     # Accounts outside the organization whose resources the organization's VPC
     # endpoints may reach (vendors, AWS-owned buckets). Empty: none may be reached.
     trusted_resource_accounts: tuple[str, ...] = ()
+    # Roles the organization deploys its logging and recording with (the Config
+    # StackSet's execution role, say). Exempt from the logging and recording
+    # guardrails only (ORG-S-01, ORG-S-02), and protected like break-glass (ORG-C-04).
+    platform_principals: tuple[str, ...] = ()
+    # Accounts outside the organization whose principals may assume organization
+    # roles and reach its SQS queues and Secrets Manager secrets (ORG-C-09). Empty: none.
+    trusted_principal_accounts: tuple[str, ...] = ()
     source_pins: dict = field(default_factory=dict)
     # Analyst decisions the spec leaves open per service, e.g. {"network_perimeter": "vpc-endpoint"}.
     decisions: dict = field(default_factory=dict)
@@ -245,6 +253,15 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
     bad = [a for a in trusted_accounts if not _ACCOUNT_ID.match(a)]
     if bad:
         problems.append(f"trusted_resource_accounts must be 12-digit AWS account IDs: {', '.join(bad)}")
+    trusted_principals = _strings(data.get("trusted_principal_accounts"), "trusted_principal_accounts", problems)
+    bad = [a for a in trusted_principals if not _ACCOUNT_ID.match(a)]
+    if bad:
+        problems.append(f"trusted_principal_accounts must be 12-digit AWS account IDs: {', '.join(bad)}")
+    platform = _strings(data.get("platform_principals"), "platform_principals", problems)
+    bad = [b for b in platform if not _BREAK_GLASS.match(b)]
+    if bad:
+        problems.append("platform_principals must be IAM role ARNs in a 12-digit account, optionally "
+                        f"ending in one * after a literal name: {', '.join(bad)}")
     bad = [b for b in break_glass if not _BREAK_GLASS.match(b)]
     if bad:
         problems.append("break_glass_principals must be IAM role ARNs in a 12-digit account, optionally "
@@ -263,5 +280,6 @@ def parse_request(data: Any, today: dt.date | None = None) -> OnboardingRequest:
         framework_profile=data.get("framework_profile") or DEFAULT_FRAMEWORK_PROFILE,
         capabilities_excluded=excluded, exceptions=tuple(exceptions),
         break_glass_principals=break_glass, trusted_resource_accounts=trusted_accounts,
+        platform_principals=platform, trusted_principal_accounts=trusted_principals,
         source_pins=source_pins, decisions=decisions,
     )

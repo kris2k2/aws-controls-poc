@@ -120,6 +120,23 @@ class ParseRequestTest(unittest.TestCase):
         self.assertIn("trusted_resource_accounts must be 12-digit AWS account IDs: *",
                       self.problems(preview_request(trusted_resource_accounts=["*"])))
 
+    def test_trusted_principal_accounts_are_account_ids(self):
+        r = parse_request(preview_request(trusted_principal_accounts=["123456789012"]), today=TODAY)
+        self.assertEqual(r.trusted_principal_accounts, ("123456789012",))
+        self.assertEqual(parse_request(preview_request(), today=TODAY).trusted_principal_accounts, ())
+        self.assertIn("trusted_principal_accounts must be 12-digit AWS account IDs: *",
+                      self.problems(preview_request(trusted_principal_accounts=["*"])))
+
+    def test_platform_principals_are_roles_in_named_accounts(self):
+        ok = ["arn:aws:iam::111122223333:role/stacksets-exec-*", "arn:aws:iam::111122223333:role/deployer"]
+        self.assertEqual(parse_request(preview_request(platform_principals=ok), today=TODAY).platform_principals,
+                         tuple(ok))
+        for bad in ("arn:aws:iam::*:role/stacksets-exec-*", "arn:aws:iam::111122223333:user/deployer",
+                    "arn:aws:iam::111122223333:root", "stacksets-exec-*"):
+            with self.subTest(bad=bad):
+                self.assertIn("platform_principals must be IAM role ARNs in a 12-digit account",
+                              self.problems(preview_request(platform_principals=[bad])))
+
     def test_internal_restricted_is_the_moderate_default(self):
         r = parse_request(preview_request(data_classification="Internal Restricted"), today=TODAY)
         self.assertEqual((r.criticality, r.criticality_source), (Criticality.MODERATE, "default"))

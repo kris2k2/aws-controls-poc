@@ -83,7 +83,7 @@
             {
               "Effect": "Allow",
               "Principal": {
-                "AWS": "arn:aws:iam::111122223333:root"
+                "AWS": "arn:aws:iam::111122223333:role/incident-responder"
               },
               "Action": "sts:AssumeRole",
               "Condition": {
@@ -103,7 +103,7 @@
             {
               "Effect": "Allow",
               "Principal": {
-                "AWS": "arn:aws:iam::444455556666:root"
+                "AWS": "arn:aws:iam::444455556666:role/incident-responder"
               },
               "Action": "sts:AssumeRole",
               "Condition": {
